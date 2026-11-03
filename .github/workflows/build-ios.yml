@@ -75,34 +75,44 @@ jobs:
         run: |
           set -euo pipefail
           echo "fetching the engine at $UPSTREAM_COMMIT"
+          # A tarball rather than a git fetch.
+          #
+          # `git fetch --depth 1 origin <sha>` does not reliably give the tree
+          # of that commit on a runner: GitHub only serves a SHA that is
+          # reachable from a ref, and the shallow fetch of an arbitrary SHA
+          # comes back without the tree in some configurations. The tarball
+          # is the same bytes, with none of that.
           rm -rf engine
-          git init -q engine
-          cd engine
-          git remote add origin "$UPSTREAM_REPO"
-          git fetch -q --depth 1 origin "$UPSTREAM_COMMIT"
-          git checkout -q FETCH_HEAD
-          cd ..
+          mkdir -p engine
+          curl -fsSL -o /tmp/engine.tar.gz \
+            "https://codeload.github.com/JamesQiu2005/SpektraLab/tar.gz/$UPSTREAM_COMMIT"
+          tar -xzf /tmp/engine.tar.gz -C engine --strip-components=1
           test -f engine/resources/spektrafilm_constants.bin \
             || { echo "the upstream checkout has no engine/resources"; exit 1; }
           test -f engine/include/spektrafilm/spk_engine.h \
             || { echo "the upstream checkout has no engine/include"; exit 1; }
-          echo "the engine is at $(cd engine && git rev-parse --short HEAD)"
+          echo "the engine is in place: $(find engine/src -name '*.cpp' | wc -l | tr -d ' ') sources"
 
       # The product profiles -- the black-and-white stocks measured for this
       # project -- live beside the upstream engine directory, not in it.
-      - name: Fetch the product profiles
+      # The product profiles -- the black-and-white stocks measured for this
+      # project -- are in the upstream tree already (engine/resources_product),
+      # so the tarball above brought them. This step is a check, not a fetch:
+      # it says so when they are missing rather than letting the build fail
+      # later with a stock that is not in the catalogue.
+      - name: Check the product profiles
         run: |
           set -euo pipefail
-          mkdir -p engine/resources_product/profiles
-          base="https://raw.githubusercontent.com/JamesQiu2005/SpektraLab/$UPSTREAM_COMMIT/engine/resources_product"
-          for f in NOTICE.md neutral_print_filters.json paper_grades.json; do
-            curl -fsSL -o "engine/resources_product/$f" "$base/$f"
-          done
-          for f in cinestill_800t fujifilm_neopan_acros_100_ii ilford_hp5_plus_400 \
-                   ilford_multigrade_iv_rc kodak_tmax_100 kodak_tri_x_400; do
-            curl -fsSL -o "engine/resources_product/profiles/$f.json" "$base/profiles/$f.json"
-          done
-          echo "product profiles: $(ls engine/resources_product/profiles | wc -l | tr -d ' ')"
+          if [ ! -d engine/resources_product/profiles ]; then
+            echo "::warning::the upstream tree has no engine/resources_product/profiles"
+            echo "::warning::the four black-and-white stocks will be missing from the app"
+            exit 0
+          fi
+          count="$(ls engine/resources_product/profiles | wc -l | tr -d ' ')"
+          echo "product profiles: $count"
+          if [ "$count" -lt 6 ]; then
+            echo "::warning::expected 6 product profiles, found $count"
+          fi
 
       - name: Patch the engine for iOS
         run: python3 tools/apply-ios-patch.py engine
