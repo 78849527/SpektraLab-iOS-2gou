@@ -402,7 +402,7 @@ jobs:
           # code is what it refuses to seal ("code object is not signed at all /
           # In subcomponent: ..."). Clearing the bit is the fix; signing those
           # two files by hand only moves the refusal to the next one.
-          find "$app_dir" -type f ! -path "$app_dir/$exe" -exec chmod a-x {} +
+          find "$app_dir" -type f -exec chmod a-x {} +
           chmod a+x "$app_dir/$exe"
 
           # Info.plist goes XML before the seal, not after: rewriting a sealed
@@ -418,27 +418,36 @@ jobs:
           # reports the bundle id as missing. Xcode skips its CodeSign phase
           # without signing material (and `AD_HOC_CODE_SIGNING_ALLOWED` does not
           # change that), so the seal is made here instead.
+          # Best-effort only. A re-signer replaces this signature anyway, and
+          # an installer reads the bundle id from Info.plist -- so a seal that
+          # cannot be made must never stop the IPA from being published.
           if [ -d "$app_dir/Frameworks" ]; then
             find "$app_dir/Frameworks" -depth \
               \( -name '*.framework' -o -name '*.appex' -o -name '*.dylib' \) -print0 |
             while IFS= read -r -d '' nested; do
-              codesign --force --sign - --timestamp=none "$nested" || exit 1
+              codesign --force --sign - --timestamp=none "$nested" || true
             done
           fi
           if codesign --force --sign - --timestamp=none "$app_dir" 2>&1 | sed 's/^/  /'
           then
             echo "sealed the bundle ad-hoc"
           else
-            echo "::warning::could not seal the bundle; the IPA stays re-signable but structurally bare"
+            echo "::warning::could not seal the bundle ad-hoc; the IPA is still\n"
+            echo "::warning::re-signable by SideStore/AltStore, which replaces the\n"
+            echo "::warning::signature and only needs Payload/*.app/Info.plist"
           fi
 
           # The identifier the seal carries is the one an installer will look
           # for, so it has to be the same string as CFBundleIdentifier.
           bundle_id=$(plutil -extract CFBundleIdentifier raw - < "$app_dir/Info.plist")
-          sealed_id=$(codesign -dv --verbose=4 "$app_dir" 2>&1 | sed -n 's/^Identifier=//p')
+          # `codesign -dv` and `codesign --verify` both exit non-zero on an
+          # unsigned bundle; under `set -e` that aborted packaging of an IPA
+          # whose Info.plist was already correct. Neither is a reason to fail.
+          sealed_id=$( { codesign -dv --verbose=4 "$app_dir" 2>&1 || true; } \
+                       | sed -n 's/^Identifier=//p')
           echo "bundle id:   $bundle_id"
-          echo "sealed id:   ${sealed_id:-<none>}"
-          codesign --verify --verbose=2 "$app_dir" 2>&1 | sed 's/^/  /'
+          echo "sealed id:   ${sealed_id:-<unsigned>}"
+          { codesign --verify --verbose=2 "$app_dir" 2>&1 || true; } | sed 's/^/  /'
           if [ "$sealed_id" = "$bundle_id" ]; then
             echo "the seal and Info.plist agree"
           else
