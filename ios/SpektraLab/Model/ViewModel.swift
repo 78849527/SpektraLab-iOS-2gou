@@ -26,10 +26,10 @@ final class ViewModel: ObservableObject {
 
     /// The app's state.
     ///
-    /// Named  rather than : inside a SwiftUI view, 
+    /// Named `AppState` rather than `State`: inside a SwiftUI view, `State`
     /// is SwiftUI's own property-wrapper type, and a nested type of the same
-    /// name makes every  in the file ambiguous -- the compiler
-    /// resolves it to some other  in scope and reports a type error
+    /// name makes every `.failed` in the file ambiguous -- the compiler
+    /// resolves it to some other `State` in scope and reports a type error
     /// about a gesture phase, which is nowhere near the problem.
     enum AppState: Equatable {
         case empty
@@ -47,8 +47,8 @@ final class ViewModel: ObservableObject {
     ///
     /// The engine gives every render a progress id, and it is a new string
     /// each time -- so it is what tells SwiftUI that the picture changed.
-    /// The texture itself cannot:  is not , and its
-    ///  does not exist.
+    /// The texture itself cannot: `MTLTexture` is not `Hashable`, and its
+    /// `hashValue` does not exist.
     @Published private(set) var renderIdentity: String = ""
     @Published private(set) var lastRenderMs: Double = 0
     @Published private(set) var sourceSize: CGSize = .zero
@@ -73,7 +73,7 @@ final class ViewModel: ObservableObject {
 
     private var engine: SpektraEngine?
     /// The canvas renderer. The view needs it to draw the texture.
-    let renderer: CanvasRenderer?
+    private(set) var renderer: CanvasRenderer? = nil
     private var device: MTLDevice?
 
     /// The render loop's state.
