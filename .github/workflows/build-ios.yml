@@ -84,14 +84,24 @@ jobs:
           set -euo pipefail
           echo "fetching the engine at $UPSTREAM_COMMIT"
           rm -rf engine
-          mkdir -p engine
-          curl -fsSL -o /tmp/engine.tar.gz \
-            "https://codeload.github.com/JamesQiu2005/SpektraLab/tar.gz/$UPSTREAM_COMMIT"
-          # The tarball's top directory is the repository's own name, so one
-          # component is stripped to get the tree itself. Without the strip
-          # the tree would land under engine/<repo-name>/ and every path
-          # below would be wrong.
-          tar -xzf /tmp/engine.tar.gz -C engine --strip-components=1
+          # A git clone rather than a tarball.
+          #
+          # The tarball of this repository comes out **without
+          # engine/resources**: GitHub does not put the large blobs in it, so
+          # the extracted tree has an `engine` directory with no `resources`
+          # in it, and the build fails with "the upstream checkout has no
+          # engine/resources". The tree API says the files are in the commit,
+          # and a clone gets them.
+          #
+          # `--filter=blob:none` keeps the clone to the commit graph and
+          # fetches the blobs only for the commit that is checked out, which
+          # is most of the 140 MB of the upstream repository saved.
+          git clone --quiet --filter=blob:none --no-checkout \
+            https://github.com/JamesQiu2005/SpektraLab.git engine
+          cd engine
+          git fetch --quiet --depth 1 origin "$UPSTREAM_COMMIT"
+          git checkout --quiet "$UPSTREAM_COMMIT"
+          cd ..
           # What actually landed, so a failure here says what is there
           # rather than only what is missing.
           echo "the tree's top level:"
