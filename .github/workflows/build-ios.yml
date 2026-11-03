@@ -414,7 +414,12 @@ jobs:
           # data-descriptor flag on every file entry, which some extractors --
           # including ones on iOS -- mishandle. What goes missing first is
           # `Info.plist`, and the installer then reports "Missing bundle ID".
-          (cd build && zip -qry ipa/SpektraLab-unsigned.ipa Payload)
+          # `repack-ipa.py`, not `zip`: `zip` and `ditto` write a 24-byte extra
+          # field (UT + ux) on every entry and stamp create_version 30, which
+          # SideStore's unzip rejects with "Archive appears to be corrupt" --
+          # or, with ditto, unpacks partway and reports the useless
+          # "Failed to get bundle ID". Python's zipfile writes none of that.
+          python3 ios/Tools/repack-ipa.py build build/ipa/SpektraLab-unsigned.ipa
           # A bundle with no `_CodeSignature` is an incomplete app bundle: a
           # re-signer reads the identifier out of the existing signature to know
           # what it is replacing, and an installer handed a bare directory
@@ -479,7 +484,7 @@ jobs:
           # `ditto -c -k` turns each one into an AppleDouble `._*` entry in
           # the zip. On the device those unpack as real files beside the
           # originals, and the seal then does not match what is there.
-          (cd build && zip -qry ipa/SpektraLab.ipa Payload)
+          python3 ios/Tools/repack-ipa.py build build/ipa/SpektraLab.ipa
           ls -la build/ipa
           # Check the archive itself rather than the staging directory: the
           # thing a signing service chokes on is what is inside the zip, and a
