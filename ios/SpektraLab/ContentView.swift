@@ -49,25 +49,13 @@ struct ContentView: View {
         }
         .alert("导出", isPresented: $showingExport) {
             Button("保存到相册") {
-                _ = Task<Void, Never> { await model.exportToPhotos() }
+                _ = Task<Void, Never> { @MainActor in
+                    await model.exportToPhotos()
+                }
             }
             Button("取消", role: .cancel) {}
         } message: {
             Text("将以原始分辨率重新渲染并保存到相册。")
-        }
-        // `onChange` is keyed on `pickerItem` directly: `PhotosPickerItem`
-        // is `Equatable` (so the two-argument closure types resolve -- the
-        // earlier failure was the `Task` inside it, not the `onChange`), but
-        // it is not `Identifiable`, so `pickerItem?.id` does not exist. The
-        // `Task` is written `Task<Void, Never>(priority:)` rather than a bare
-        // `Task { }`: inside the `@Sendable` `onChange` closure the compiler
-        // cannot infer the `Success` type of a bare `Task`, so it reports
-        // "ambiguous use of 'init(priority:operation:)'". Pinning the generic
-        // arguments picks a single initializer.
-        .onChange(of: pickerItem) { _, newValue in
-            Task<Void, Never>(priority: .userInitiated) {
-                await model.importPicked(newValue)
-            }
         }
     }
 
@@ -78,7 +66,23 @@ struct ContentView: View {
     // has no overload to be ambiguous about.
     private var topBar: some View {
         HStack(spacing: 12) {
-            PhotosPicker(selection: $pickerItem, matching: .images) {
+            // Trigger the import from the binding's setter rather than
+            // from `.onChange`: the two-argument `onChange(of:initial:_:)`
+            // is iOS 17+, while this app targets iOS 16.0. A setter has
+            // no availability constraint. `Task<Void, Never>` pins the
+            // generic arguments so the initializer is unambiguous in a
+            // `@Sendable` closure.
+            PhotosPicker(selection: Binding<PhotosPickerItem?>(
+                get: { pickerItem },
+                set: { newItem in
+                    pickerItem = newItem
+                    if let newItem {
+                        Task<Void, Never>(priority: .userInitiated) { @MainActor in
+                            await model.importPicked(newItem)
+                        }
+                    }
+                }
+            ), matching: .images) {
                 Label("导入", systemImage: "photo.on.rectangle")
             }
             Spacer()
