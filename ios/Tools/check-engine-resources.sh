@@ -15,7 +15,7 @@
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-dst="$here/../SpektraLab/Resources/engine"
+dst="$here/../SpektraLab/Resources"
 
 missing=0
 note_missing() {
@@ -24,27 +24,14 @@ note_missing() {
   missing=1
 }
 
-if [ ! -f "$dst/spektrafilm_constants.bin" ]; then
-  note_missing "$dst/spektrafilm_constants.bin"
-fi
-if [ ! -f "$dst/spektrafilm.metallib" ]; then
-  note_missing "$dst/spektrafilm.metallib"
-fi
-if [ ! -f "$dst/print_luts.json" ]; then
-  note_missing "$dst/print_luts.json"
-fi
-if [ ! -d "$dst/profiles" ]; then
-  note_missing "$dst/profiles/"
-else
-  count="$(find "$dst/profiles" -name '*.json' | wc -l | tr -d ' ')"
-  if [ "$count" -lt 20 ]; then
-    echo "error: only $count stock profiles in $dst/profiles (expected 28+)."
-    missing=1
-  fi
+# The resources ship as one archive now (see `pack-engine-assets.py`): a
+# sideloading installer fails to copy a bundle that holds 33 loose files.
+if [ ! -f "$dst/engine-assets.bin" ]; then
+  note_missing "$dst/engine-assets.bin"
 fi
 
 if [ "$missing" -ne 0 ]; then
   exit 1
 fi
 
-echo "the engine's resources are in place ($(find "$dst/profiles" -name '*.json' | wc -l | tr -d ' ') profiles)"
+echo "the engine's resources are in place ($(du -h "$dst/engine-assets.bin" | cut -f1) archive)"

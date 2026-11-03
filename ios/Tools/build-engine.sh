@@ -66,70 +66,77 @@ build_metallib() {
   echo "==> linking spektrafilm.metallib"
   xcrun -sdk iphoneos metallib "${airs[@]}" -o "$out/spektrafilm.metallib"
 
-  # The copy the app bundle carries. The engine loads this file by name.
-  mkdir -p "$app/Resources/engine"
-  cp "$out/spektrafilm.metallib" "$app/Resources/engine/spektrafilm.metallib"
-  echo "    -> $app/Resources/engine/spektrafilm.metallib"
+  # `build_resources` packs this into the app's single resource archive, so
+  # nothing is copied into the bundle from here.
+  echo "    -> $out/spektrafilm.metallib"
 }
 
 build_resources() {
   local src="$engine/resources"
   local product="$engine/resources_product"
-  local dst="$app/Resources/engine"
+  local out="$engine/build/ios"
+  local staging="$engine/build/assets"
+  local dst="$app/Resources"
 
-  echo "==> copying the engine's baked resources"
-  mkdir -p "$dst"
+  echo "==> staging the engine's baked resources"
+  rm -rf "$staging"
+  mkdir -p "$staging/profiles" "$staging/io"
 
   # The baked constants: 9.4 MB of measured tables. The engine reads this by
   # name out of the resources directory.
-  cp "$src/spektrafilm_constants.bin" "$dst/"
-  cp "$src/print_luts.json" "$dst/"
-  cp "$src/neutral_print_filters.json" "$dst/"
+  cp "$src/spektrafilm_constants.bin" "$staging/"
+  cp "$src/print_luts.json" "$staging/"
+  cp "$src/neutral_print_filters.json" "$staging/"
+
+  # The kernels, when `build_metallib` has already run.
+  if [ -f "$out/spektrafilm.metallib" ]; then
+    cp "$out/spektrafilm.metallib" "$staging/"
+  fi
 
   # The stock profiles. The engine resolves a stock by name against
   # `<resources>/profiles/<stock>.json`, so both directories' profiles are
   # merged into the one the engine looks in.
-  mkdir -p "$dst/profiles"
-  cp "$src/profiles/"*.json "$dst/profiles/"
+  cp "$src/profiles/"*.json "$staging/profiles/"
   if [ -d "$product/profiles" ]; then
-    cp "$product/profiles/"*.json "$dst/profiles/"
+    cp "$product/profiles/"*.json "$staging/profiles/"
   fi
 
   # The colour profile the export embeds.
-  mkdir -p "$dst/io"
-  cp "$src/io/sRGB.icc" "$dst/io/"
+  cp "$src/io/sRGB.icc" "$staging/io/"
 
   # The product's own extras: the paper grades and the neutral filters.
   if [ -f "$product/paper_grades.json" ]; then
-    cp "$product/paper_grades.json" "$dst/"
+    cp "$product/paper_grades.json" "$staging/"
   fi
   if [ -f "$product/neutral_print_filters.json" ]; then
-    cp "$product/neutral_print_filters.json" "$dst/product_neutral_print_filters.json"
+    cp "$product/neutral_print_filters.json" "$staging/product_neutral_print_filters.json"
   fi
 
   local count
-  count="$(find "$dst/profiles" -name '*.json' | wc -l | tr -d ' ')"
-  echo "    $count profiles, $(du -sh "$dst" | cut -f1) total"
+  count="$(find "$staging/profiles" -name '*.json' | wc -l | tr -d ' ')"
+  echo "    $count profiles staged"
+
+  # One archive instead of 33 loose files. A sideloading installer unpacks the
+  # IPA into its own staging directory and copies the .app to a fixed name;
+  # with this many entries that copy fails on iOS 27, and the only thing it
+  # reports is "Failed to get bundle ID ... /Payload/App.app", which names
+  # nothing useful. A six-entry test bundle installed fine on the same device.
+  echo "==> packing them into one file"
+  mkdir -p "$dst"
+  rm -rf "$dst/engine"
+  rm -f "$dst/engine-assets.bin"
+  python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pack-engine-assets.py" \
+    "$staging" "$dst/engine-assets.bin"
 }
 
 check_resources() {
-  local dst="$app/Resources/engine"
-  local missing=0
-  for f in spektrafilm_constants.bin spektrafilm.metallib print_luts.json; do
-    if [ ! -f "$dst/$f" ]; then
-      echo "MISSING: $dst/$f"
-      missing=1
-    fi
-  done
-  if [ ! -d "$dst/profiles" ]; then
-    echo "MISSING: $dst/profiles"
-    missing=1
-  fi
-  if [ "$missing" -ne 0 ]; then
+  local dst="$app/Resources/engine-assets.bin"
+  if [ ! -f "$dst" ]; then
+    echo "MISSING: $dst"
     echo "run ios/Tools/build-engine.sh bundle before building the app"
     exit 1
   fi
-  echo "the engine's resources are in place"
+  echo "the engine's resources are in place ($(du -h "$dst" | cut -f1) archive)"
 }
 
 case "${1:-bundle}" in

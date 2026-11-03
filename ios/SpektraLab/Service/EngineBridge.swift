@@ -129,6 +129,23 @@ final class SpektraEngine {
     /// `Bundle.main` is right here: this is the app, not a test bundle (the
     /// macOS app uses `Bundle(for:)` because its unit-test target is
     /// standalone and `Bundle.main` is the test agent there).
+    /// Three shapes are supported, in this order:
+    ///
+    /// 1. `SPEKTRAFILM_ENGINE_RESOURCES` -- a plain directory, for tests.
+    /// 2. `Resources/engine/` -- loose files, which is what a local build
+    ///    (`ios/Tools/build-engine.sh bundle`) lays down.
+    /// 3. `Resources/engine-assets.bin` -- one packed archive, which is what
+    ///    the CI ships.
+    ///
+    /// The third exists because of a device-side limit, not a design choice:
+    /// a sideloading installer (SideStore/AltStore) unpacks the IPA into its
+    /// own staging directory and then copies the `.app` to a fixed name. With
+    /// 33 loose resource files inside, that copy fails on iOS 27 and the only
+    /// thing it reports is "Failed to get bundle ID ... /Payload/App.app".
+    /// A six-entry test bundle installed fine on the same device, so the entry
+    /// count is what matters.
+    ///
+    /// - Returns: the directory holding `spektrafilm_constants.bin`.
     static func defaultResources() -> URL {
         if let env = ProcessInfo.processInfo.environment["SPEKTRAFILM_ENGINE_RESOURCES"],
            !env.isEmpty {
@@ -138,9 +155,85 @@ final class SpektraEngine {
                                          withExtension: "bin", subdirectory: "Resources/engine") {
             return bundled.deletingLastPathComponent()
         }
+        if let archive = Bundle.main.url(forResource: "engine-assets",
+                                         withExtension: "bin",
+                                         subdirectory: "Resources"),
+           let unpacked = unpackBundledResources(archive) {
+            return unpacked
+        }
         // A build that skipped `ios/Tools/build-engine.sh bundle` lands here,
         // and the error the caller reports names this path.
         return Bundle.main.bundleURL.appending(path: "Resources/engine")
+    }
+
+    /// Unpacks `engine-assets.bin` into Caches on first launch.
+    ///
+    /// The format is the one `ios/Tools/pack-engine-assets.py` writes:
+    /// `"SPKA"`, a `uint32` file count, then for each file a `uint16` name
+    /// length, the UTF-8 name, a `uint32` data length and the bytes. iOS has
+    /// no zip or tar reader in the SDK, so this is read with `Data` alone.
+    ///
+    /// The files land in a sibling directory first and are moved into place in
+    /// one step, so a half-written tree can never be mistaken for a complete
+    /// one by a later launch.
+    private static func unpackBundledResources(_ archive: URL) -> URL? {
+        guard let blob = try? Data(contentsOf: archive), blob.count > 8 else { return nil }
+        let bytes = [UInt8](blob)
+        guard bytes[0] == 0x53, bytes[1] == 0x50,
+              bytes[2] == 0x4B, bytes[3] == 0x41 else { return nil }
+
+        let fileManager = FileManager.default
+        guard let caches = fileManager.urls(for: .cachesDirectory,
+                                            in: .userDomainMask).first else { return nil }
+        let root = caches.appendingPathComponent("engine", isDirectory: true)
+        if fileManager.fileExists(
+            atPath: root.appendingPathComponent("spektrafilm_constants.bin").path) {
+            return root
+        }
+
+        var cursor = 4
+        func readU16() -> Int? {
+            guard cursor + 2 <= bytes.count else { return nil }
+            defer { cursor += 2 }
+            return Int(bytes[cursor]) | (Int(bytes[cursor + 1]) << 8)
+        }
+        func readU32() -> Int? {
+            guard cursor + 4 <= bytes.count else { return nil }
+            defer { cursor += 4 }
+            return Int(bytes[cursor])
+                | (Int(bytes[cursor + 1]) << 8)
+                | (Int(bytes[cursor + 2]) << 16)
+                | (Int(bytes[cursor + 3]) << 24)
+        }
+
+        guard let count = readU32() else { return nil }
+
+        let staging = caches.appendingPathComponent("engine-unpacking", isDirectory: true)
+        try? fileManager.removeItem(at: staging)
+        guard (try? fileManager.createDirectory(at: staging,
+                                                withIntermediateDirectories: true)) != nil else {
+            return nil
+        }
+
+        for _ in 0 ..< count {
+            guard let nameLength = readU16(), cursor + nameLength <= bytes.count else {
+                return nil
+            }
+            let name = String(decoding: bytes[cursor ..< (cursor + nameLength)], as: UTF8.self)
+            cursor += nameLength
+            guard let size = readU32(), cursor + size <= bytes.count else { return nil }
+            let payload = Data(bytes[cursor ..< (cursor + size)])
+            cursor += size
+
+            let target = staging.appendingPathComponent(name)
+            try? fileManager.createDirectory(at: target.deletingLastPathComponent(),
+                                             withIntermediateDirectories: true)
+            guard (try? payload.write(to: target)) != nil else { return nil }
+        }
+
+        try? fileManager.removeItem(at: root)
+        guard (try? fileManager.moveItem(at: staging, to: root)) != nil else { return nil }
+        return root
     }
 
     /// The engine's own last error on this thread. Never NULL.
