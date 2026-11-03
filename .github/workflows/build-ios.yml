@@ -359,6 +359,15 @@ jobs:
           mkdir -p build/Payload
           cp -R "$app" build/Payload/SpektraLab.app
 
+          # Xcode writes the bundle's Info.plist as a *binary* plist. iOS reads
+          # either form, but a re-signing or installation service that scrapes
+          # the bundle id out of the file as text finds nothing in a binary one
+          # and reports "Missing bundle ID" -- which is an unusable IPA, so the
+          # artifact carries the form every parser reads. The conversion is
+          # before the seal below because rewriting a sealed file breaks it.
+          plutil -convert xml1 build/Payload/SpektraLab.app/Info.plist
+          echo "Info.plist now starts with: $(head -c 38 build/Payload/SpektraLab.app/Info.plist)"
+
           # Ad-hoc: no identity, no profile. A device refuses to install this
           # either way, so the signature seals resources and nothing more --
           # it is a nicety, not a gate, and a failure warns instead of
@@ -382,6 +391,17 @@ jobs:
 
           (cd build && ditto -c -k --keepParent Payload ipa/SpektraLab.ipa)
           ls -la build/ipa
+
+          # Check the archive itself rather than the staging directory: the
+          # thing a signing service chokes on is what is inside the zip, and a
+          # `Payload/` path that is one level off looks fine right up until it
+          # does not install.
+          unzip -l build/ipa/SpektraLab.ipa | sed -n '1,5p'
+          unzip -p build/ipa/SpektraLab.ipa Payload/SpektraLab.app/Info.plist > build/shipped.plist
+          echo "shipped Info.plist starts with: $(head -c 38 build/shipped.plist)"
+          echo "shipped bundle id: $(plutil -extract CFBundleIdentifier raw - < build/shipped.plist)"
+          echo "shipped executable: $(plutil -extract CFBundleExecutable raw - < build/shipped.plist)"
+          echo "shipped minimum iOS: $(plutil -extract MinimumOSVersion raw - < build/shipped.plist)"
           echo "::notice::build/ipa/SpektraLab.ipa is not device-installable as it stands: re-sign it with your own Apple ID (AltStore/Sideloadly/Xcode), or set the seven signing secrets to get a signed export."
 
       - name: Upload the IPA
