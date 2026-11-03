@@ -13,9 +13,12 @@
 | 项 | 值 |
 |---|---|
 | release | <https://github.com/Minerchu/SpektraLab-iOS/releases/tag/latest> |
-| 资产 | `SpektraLab.ipa`，9 657 104 bytes |
+| 资产 | `SpektraLab.ipa`，9 657 105 bytes |
 | 直链 | <https://github.com/Minerchu/SpektraLab-iOS/releases/latest/download/SpektraLab.ipa> |
 | 匿名可下载 | 是（仓库 public，链接 302 到资产，zip 以 `Payload/` 开头） |
+
+滚动替换在 run `41620080899`（commit `d4389cf94a`）上验证过：`latest` tag 跟着
+移动、release 仍然只有一个、资产没有重复堆积。
 
 **这个 IPA 仍然装不上真机**：没有证书与描述文件，bundle 里没有效签名
 （`codesign` 的 ad-hoc 封装被 `Assets.car` / `default.metallib` 拒绝，见下面最后一个坑）。
