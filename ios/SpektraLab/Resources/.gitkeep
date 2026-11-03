@@ -1,6 +1,0 @@
-# The engine's baked resources land here: ios/Tools/build-engine.sh copies
-# them into Resources/engine, and the Xcode project carries this folder as a
-# folder reference, so they ship in the app bundle at Resources/engine.
-#
-# They are not in this repository: they are 9.4 MB of measured tables and a
-# compiled metallib, and ios/Tools/build-engine.sh produces them.
