@@ -7,13 +7,14 @@
 #
 #  What this job does, in order:
 #
-#    1. check out this repository and the upstream engine,
+#    1. fetch the upstream engine,
 #    2. patch the engine for iOS (`tools/apply-ios-patch.py`),
 #    3. compile the engine's Metal kernels for iOS and bake its resources,
-#    4. build and sign the app for a device,
-#    5. export the IPA and hand it over as an artifact.
+#    4. draw the app icon,
+#    5. generate the Xcode project and build it for a device,
+#    6. export the IPA and hand it over as an artifact.
 #
-#  The secrets it needs — all optional, and the job says so when one is
+#  The secrets it needs -- all optional, and the job says so when one is
 #  missing:
 #
 #    IOS_CERTIFICATE_P12        base64 of the .p12 (a development certificate)
@@ -26,8 +27,10 @@
 #    IOS_BUNDLE_ID              the bundle id the profile is for
 #
 #  Without them the job still builds and signs *ad-hoc*, which produces an
-#  IPA that a device will refuse to install — so the job checks and says so
+#  IPA that a device will refuse to install -- so the job checks and says so
 #  rather than handing over something that looks finished and is not.
+#
+#  `tools/set-github-secrets.py` sets all seven from the files on disk.
 
 name: Build IPA
 
@@ -49,16 +52,15 @@ jobs:
 
     # Job-level environment: the bundle id and the upstream commit are
     # configuration, not secrets, and every step reads them from here.
+    #
+    # The HAVE_* flags are there because GitHub's expression evaluator does
+    # not have `secrets` in a step's `if:` -- only in a step's `env:`. So
+    # the question "is the certificate there?" has to be asked of an
+    # environment variable rather than of the secret store.
     env:
       IOS_BUNDLE_ID: ${{ secrets.IOS_BUNDLE_ID }}
       UPSTREAM_COMMIT: 02d82b56cf65f0f8e802a708612edc4e9a4790af
-      UPSTREAM_REPO: https://github.com/JamesQiu2005/SpektraLab.git
       BUNDLE_ID_DEFAULT: com.hanze.spektralab
-      # Whether the signing material is there.
-      #
-      # These are *flags*, not the secrets themselves: GitHub's expression
-      # evaluator does not have `secrets` in a step's `if:/, so the question "is it set?" has to be asked of an
-      # environment variable rather than of the secret store.
       HAVE_CERT: ${{ secrets.IOS_CERTIFICATE_P12 != '' }}
       HAVE_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE != '' }}
       HAVE_TEAM: ${{ secrets.IOS_TEAM_ID != '' }}
@@ -71,30 +73,41 @@ jobs:
       # The engine is upstream's, and it is not in this repository: this one
       # carries the app, the patch and the build scripts, and the engine comes
       # from the upstream project at a pinned commit.
+      #
+      # A tarball rather than a git fetch. `git fetch --depth 1 origin <sha>`
+      # does not reliably give the tree of that commit: GitHub serves a SHA
+      # only when it is reachable from a ref, and a shallow fetch of an
+      # arbitrary SHA comes back without the tree. The tarball is the same
+      # bytes with none of that.
       - name: Fetch the upstream engine
         run: |
           set -euo pipefail
           echo "fetching the engine at $UPSTREAM_COMMIT"
-          # A tarball rather than a git fetch.
-          #
-          # `git fetch --depth 1 origin <sha>` does not reliably give the tree
-          # of that commit on a runner: GitHub only serves a SHA that is
-          # reachable from a ref, and the shallow fetch of an arbitrary SHA
-          # comes back without the tree in some configurations. The tarball
-          # is the same bytes, with none of that.
           rm -rf engine
           mkdir -p engine
           curl -fsSL -o /tmp/engine.tar.gz \
             "https://codeload.github.com/JamesQiu2005/SpektraLab/tar.gz/$UPSTREAM_COMMIT"
+          # The tarball's top directory is the repository's own name, so one
+          # component is stripped to get the tree itself. Without the strip
+          # the tree would land under engine/<repo-name>/ and every path
+          # below would be wrong.
           tar -xzf /tmp/engine.tar.gz -C engine --strip-components=1
-          test -f engine/resources/spektrafilm_constants.bin \
-            || { echo "the upstream checkout has no engine/resources"; exit 1; }
-          test -f engine/include/spektrafilm/spk_engine.h \
-            || { echo "the upstream checkout has no engine/include"; exit 1; }
+          # What actually landed, so a failure here says what is there
+          # rather than only what is missing.
+          echo "the tree's top level:"
+          ls engine
+          if [ ! -f engine/resources/spektrafilm_constants.bin ]; then
+            echo "::error::no engine/resources/spektrafilm_constants.bin in the upstream tree"
+            echo "::error::engine/resources holds:"
+            ls -la engine/resources 2>&1 || true
+            exit 1
+          fi
+          if [ ! -f engine/include/spektrafilm/spk_engine.h ]; then
+            echo "::error::no engine/include/spektrafilm/spk_engine.h in the upstream tree"
+            exit 1
+          fi
           echo "the engine is in place: $(find engine/src -name '*.cpp' | wc -l | tr -d ' ') sources"
 
-      # The product profiles -- the black-and-white stocks measured for this
-      # project -- live beside the upstream engine directory, not in it.
       # The product profiles -- the black-and-white stocks measured for this
       # project -- are in the upstream tree already (engine/resources_product),
       # so the tarball above brought them. This step is a check, not a fetch:
@@ -129,10 +142,11 @@ jobs:
         run: ios/Tools/build-engine.sh bundle
 
       # The app icon is drawn by a Python script (Pillow), not shipped as an
-      # asset, so it is generated before the project is regenerated. It lands at
-      # `ios/SpektraLab/Assets.xcassets/AppIcon.appiconset`, which `gen-project.py`
-      # then carries as a compiled asset catalog. A missing Pillow is not fatal:
-      # the build continues and ships with no custom icon rather than failing.
+      # asset, so it is generated before the project is regenerated. It lands
+      # at `ios/SpektraLab/Assets.xcassets/AppIcon.appiconset`, which
+      # `gen-project.py` then carries as a compiled asset catalog. A missing
+      # Pillow is not fatal: the build continues and ships with no custom
+      # icon rather than failing.
       - name: App icon
         run: |
           set -euo pipefail
@@ -201,12 +215,17 @@ jobs:
             echo "::warning::  IOS_CERTIFICATE_P12, IOS_CERTIFICATE_PASSWORD,"
             echo "::warning::  IOS_CERTIFICATE_IDENTITY, IOS_PROVISIONING_PROFILE,"
             echo "::warning::  IOS_PROVISIONING_PROFILE_NAME, IOS_TEAM_ID, IOS_BUNDLE_ID"
+            echo "::warning::tools/set-github-secrets.py sets all seven from the files."
           fi
 
       # --- build -----------------------------------------------------------
       #
       # The project is regenerated with the signing settings, so the same
       # committed file builds both signed and unsigned.
+      #
+      # `-target`, not `-scheme`: the project is generated, and the generator
+      # writes a target rather than a scheme. `xcodebuild -scheme` on a
+      # project with no scheme says "scheme not found" and stops.
       - name: Build
         env:
           SPEKTRAFILM_SIGN_IDENTITY: ${{ secrets.IOS_CERTIFICATE_IDENTITY }}
@@ -224,8 +243,7 @@ jobs:
             -derivedDataPath build/DerivedData \
             -destination "generic/platform=iOS" \
             -archivePath build/SpektraLab.xcarchive \
-            archive \
-            2>&1 | tee build/xcodebuild.log
+            archive 2>&1 | tee build/xcodebuild.log
           echo "the archive is at build/SpektraLab.xcarchive"
 
       - name: Export the IPA
@@ -239,14 +257,13 @@ jobs:
           mkdir -p build/ipa
           bundle="${IOS_BUNDLE_ID:-$BUNDLE_ID_DEFAULT}"
           if [ -n "${IOS_PROFILE_NAME:-}" ] && [ -n "${IOS_TEAM_ID:-}" ]; then
-            method="development"
             cat > build/ExportOptions.plist <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
             <key>method</key>
-            <string>${method}</string>
+            <string>development</string>
             <key>teamID</key>
             <string>${IOS_TEAM_ID}</string>
             <key>signingStyle</key>
@@ -260,6 +277,8 @@ jobs:
           </plist>
           PLIST
           else
+            # No profile: an ad-hoc signature. The IPA is produced, and it
+            # will not install on a device -- the warning above says so.
             cat > build/ExportOptions.plist <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
