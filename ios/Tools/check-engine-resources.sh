@@ -15,7 +15,7 @@
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-dst="$here/../SpektraLab/Resources"
+dst="$here/../../build"
 
 missing=0
 note_missing() {
@@ -34,4 +34,4 @@ if [ "$missing" -ne 0 ]; then
   exit 1
 fi
 
-echo "the engine's resources are in place ($(du -h "$dst/engine-assets.bin" | cut -f1) archive)"
+echo "the engine's resources are in place ($(du -h "$dst/engine-assets.bin" | cut -f1) archive, shipped separately)"

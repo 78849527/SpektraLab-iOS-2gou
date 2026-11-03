@@ -141,6 +141,26 @@ jobs:
       # `gen-project.py` then carries as a compiled asset catalog. A missing
       # Pillow is not fatal: the build continues and ships with no custom
       # icon rather than failing.
+      # The app fetches these on first launch; the IPA deliberately does not
+      # carry them. A 15 MB payload inside the .app makes a side-loading
+      # installer fail when it copies the unpacked IPA to its fixed `App.app`,
+      # and all it reports is "Failed to get bundle ID". The URL in
+      # `EngineBridge.remoteAssets` points at this tag and file name.
+      - name: Publish the engine assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          asset="build/engine-assets.bin"
+          if [ ! -f "$asset" ]; then
+            echo "::error::build-engine.sh did not produce $asset"
+            exit 1
+          fi
+          echo "asset: $(du -h "$asset" | cut -f1)"
+          gh release view engine-assets >/dev/null 2>&1 || gh release create engine-assets --title "Engine assets" --notes "Baked engine resources, downloaded by the app on first launch. The IPA does not carry them: a 15 MB payload inside the .app makes a side-loading installer fail with Failed to get bundle ID."
+          gh release upload engine-assets "$asset" --clobber
+          echo "published to the engine-assets release"
+
       - name: App icon
         run: |
           set -euo pipefail

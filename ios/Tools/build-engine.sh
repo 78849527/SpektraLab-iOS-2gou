@@ -76,7 +76,11 @@ build_resources() {
   local product="$engine/resources_product"
   local out="$engine/build/ios"
   local staging="$engine/build/assets"
-  local dst="$app/Resources"
+  # Not inside the app bundle. A 15 MB payload in the .app makes the
+  # sideloading installer fail when it copies the unpacked IPA to its fixed
+  # `App.app`, reporting only "Failed to get bundle ID". It ships as a release
+  # asset and the app downloads it on first launch.
+  local dst="$app/../../build"
 
   echo "==> staging the engine's baked resources"
   rm -rf "$staging"
@@ -123,14 +127,14 @@ build_resources() {
   # nothing useful. A six-entry test bundle installed fine on the same device.
   echo "==> packing them into one file"
   mkdir -p "$dst"
-  rm -rf "$dst/engine"
+  rm -rf "$app/Resources/engine"
   rm -f "$dst/engine-assets.bin"
   python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pack-engine-assets.py" \
     "$staging" "$dst/engine-assets.bin"
 }
 
 check_resources() {
-  local dst="$app/Resources/engine-assets.bin"
+  local dst="$app/../../build/engine-assets.bin"
   if [ ! -f "$dst" ]; then
     echo "MISSING: $dst"
     echo "run ios/Tools/build-engine.sh bundle before building the app"

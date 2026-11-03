@@ -166,6 +166,32 @@ final class SpektraEngine {
         return Bundle.main.bundleURL.appending(path: "Resources/engine")
     }
 
+    /// Where the CI publishes the packed resources.
+    ///
+    /// The bundle deliberately does not carry them. A side-loading installer
+    /// unpacks the IPA into its own staging directory and copies the `.app` to
+    /// a fixed name; a 15 MB payload inside that copy fails on iOS 27 and all
+    /// it reports is "Failed to get bundle ID". An IPA without the archive
+    /// installs, so it is fetched here on first launch, unpacked into Caches,
+    /// and read from there on every launch after.
+    private static let remoteAssets = URL(
+        string: "https://github.com/Minerchu/SpektraLab-iOS/releases/download/engine-assets/engine-assets.bin")!
+
+    /// Downloads the resource archive and unpacks it. First launch only.
+    ///
+    /// - Throws: `EngineError.noResources` when the download fails or the
+    ///   archive cannot be unpacked.
+    static func fetchResourcesRemotely() async throws -> URL {
+        let (archive, response) = try await URLSession.shared.download(from: remoteAssets)
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            throw EngineError.noResources("资源下载失败（HTTP \(http.statusCode)）")
+        }
+        guard let directory = unpackBundledResources(archive) else {
+            throw EngineError.noResources("资源包无法解开")
+        }
+        return directory
+    }
+
     /// Unpacks `engine-assets.bin` into Caches on first launch.
     ///
     /// The format is the one `ios/Tools/pack-engine-assets.py` writes:

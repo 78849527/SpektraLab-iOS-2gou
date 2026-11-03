@@ -109,7 +109,34 @@ final class ViewModel: ObservableObject {
             state = .empty
             statusText = "就绪 · \(catalog.films.count) 款胶片 · \(catalog.papers.count) 款相纸"
         } catch {
+            // The CI build does not ship the resource archive inside the .app:
+            // a 15 MB payload makes the side-loading installer fail when it
+            // copies the unpacked IPA to its fixed `App.app`, and it reports
+            // only "Failed to get bundle ID". The six-entry test bundle
+            // installed fine, so the archive is fetched here once instead.
+            state = .importing
+            statusText = "首次启动：正在准备引擎资源…"
+            Task { @MainActor in
+                await self.prepareResourcesAndStart(device: device)
+            }
+        }
+    }
+
+    /// First-launch path: download the resources, unpack them, start the
+    /// engine. Every launch after that finds the unpacked copy in Caches and
+    /// never reaches the network.
+    private func prepareResourcesAndStart(device: MTLDevice) async {
+        do {
+            let resources = try await SpektraEngine.fetchResourcesRemotely()
+            catalog = StockCatalog.load(resources: resources)
+            let engine = try SpektraEngine(device: device, resources: resources)
+            self.engine = engine
+            self.renderer = CanvasRenderer(device: device)
+            state = .empty
+            statusText = "就绪 · \(catalog.films.count) 款胶片 · \(catalog.papers.count) 款相纸"
+        } catch {
             state = .failed(error.localizedDescription)
+            statusText = "资源准备失败"
         }
     }
 
