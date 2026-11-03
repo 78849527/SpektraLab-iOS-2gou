@@ -78,17 +78,17 @@ struct ContentView: View {
         } message: {
             Text("将以原始分辨率重新渲染并保存到相册。")
         }
-        // Keyed on `pickerItem?.id` (`String?`, always `Equatable`) rather
-        // than on `pickerItem` itself: `PhotosPickerItem` is not `Equatable`
-        // in this SDK, so `onChange(of: pickerItem)` left the closure's
-        // parameter type unresolved and the compiler then reported a
-        // spurious "ambiguous use of 'init(priority:operation:)'". With a
-        // concrete key the closure types resolve, and the `Task(priority:)`
-        // form picks a single initializer.
-        .onChange(of: pickerItem?.id) { _, _ in
-            guard let item = pickerItem else { return }
+        // `onChange` is keyed on `pickerItem` directly: `PhotosPickerItem`
+        // is `Equatable` (so the two-argument closure types resolve -- the
+        // earlier failure was the `Task` inside it, not the `onChange`), but
+        // it is not `Identifiable`, so `pickerItem?.id` does not exist. The
+        // `Task` is written `Task(priority:)` rather than a bare `Task { }`:
+        // inside the `@Sendable` `onChange` closure the trailing-closure form
+        // is ambiguous between the `Task` initializers ("ambiguous use of
+        // 'init(priority:operation:)'"); naming the priority picks one.
+        .onChange(of: pickerItem) { _, newValue in
             Task(priority: .userInitiated) {
-                await model.importPicked(item)
+                await model.importPicked(newValue)
             }
         }
     }
