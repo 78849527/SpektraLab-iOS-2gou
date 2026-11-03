@@ -5,7 +5,8 @@
 
 ## 一句话现状
 
-**编译 100% 通过，且 CI 已不再依赖 `xcodebuild archive`。**
+**编译 100% 通过；`Build` 步骤通过；`Package the IPA` 已改成「签名失败不致命」，
+正在等第一份 IPA 工件落地。**
 
 根因（已确认并绕开）：archive 在写 `.xcarchive/Info.plist` 时是**从代码签名里**读取
 bundle id / Team 的。CI runner 上没有证书与描述文件，归档出来的 .app
@@ -19,14 +20,31 @@ bundle id / Team 的。CI runner 上没有证书与描述文件，归档出来�
 - `Build`：签名 secret 齐全 → 走 `archive`；否则 → 直接
   `xcodebuild ... build CODE_SIGNING_ALLOWED=NO`，产出
   `Release-iphoneos/SpektraLab.app`，并把 `BUILD_MODE=archive|package` 写进
-  `$GITHUB_ENV`。
-- `Package the IPA`：archive 模式走 `-exportArchive`（正规签名 IPA）；package
-  模式把 .app 拷进 `Payload/`，自己 `codesign --force --sign -` ad-hoc 签名，再用
-  `ditto -c -k --keepParent` 打成 `build/ipa/SpektraLab-unsigned.ipa`（用 `ditto`
-  不用 `zip`：iOS 需要它保留的 bundle 元数据与符号链接）。
+  `$GITHUB_ENV`。**这一步已经全绿。**
+- `Package the IPA`：archive 模式用 `plistlib` 生成 `ExportOptions.plist`
+  后走 `-exportArchive`；package 模式把 .app 拷进 `Payload/`，给自己和嵌套的
+  `*.metallib` 做 ad-hoc 签名，再用 `ditto -c -k --keepParent` 打成
+  `build/ipa/SpektraLab-unsigned.ipa`（用 `ditto` 不用 `zip`：iOS 需要它保留的
+  bundle 元数据与符号链接）。
 
 所以**无 secret 也能出 IPA 工件**，但它是 ad-hoc 签名、装不上真机 ——
 要么用 AltStore/Xcode 以自己的 Apple ID 重签，要么配齐下面那 7 个 secret 走正规签名路径。
+
+### 最后一个坑（run `41614070312`，已修）
+
+`Package the IPA` 第一次跑的时候死在 ad-hoc 签名：
+
+```
+build/Payload/SpektraLab.app: code object is not signed at all
+In subcomponent: .../Payload/SpektraLab.app/default.metallib
+```
+
+`codesign` 在封装 bundle 前会先走一遍嵌套代码，而 `Canvas.metal` 编出来的
+`default.metallib` 被它当成一个「未签名的代码对象」，于是整个 bundle 拒绝签名。
+修法：**先给 bundle 里每个 `*.metallib` 单独 ad-hoc 签名，再签 bundle**；
+并且这一次签名失败只 `::warning::` 不中断，因为无证书的 IPA 本来也装不上真机，
+不该为了一个装饰性签名扔掉四十分钟的构建产物。
+
 
 ## 以下保留原始踩坑记录（仍是有效背景，勿重复尝试）
 
@@ -55,7 +73,7 @@ xcodebuild: error: Archive Missing Bundle Identifier
 
 CI 步骤顺序：checkout → fetch engine → check profiles → patch engine → Metal toolchain
 → kernels & resources → App icon → generate project → install cert(跳过) → install
-profile(跳过) → say what is missing → **Build(失败)** → export IPA(跳过) → upload。
+profile(跳过) → say what is missing → Build(通过) → Package the IPA → upload。
 
 签名相关 secret 全部未配置，所以 `Install the signing certificate` / `Install the
 provisioning profile` 两步被跳过，`ExportOptions.plist` 走 ad-hoc 分支。
@@ -128,6 +146,11 @@ code object is not signed at all  <-- app 完全没签名
    在无凭据 CI 上必失败）。
 10. **`VALIDATE_PRODUCT = YES`** 从 Release 配置移除（它会触发
     `builtin-validationUtility` 校验无签名 app）。
+11. **`codesign` 拒绝封装含未签名 `default.metallib` 的 bundle**（见上文
+    「最后一个坑」）：先签每个 `*.metallib` 再签 bundle，且签名失败只告警。
+12. **`ExportOptions.plist` 不要用 heredoc 写**：YAML 块标量的缩进会被带进文件，
+    `<?xml` 前面多了空格就不是合法的 XML 声明了，`xcodebuild` 会拒收。
+    改用 `plistlib.dump()` 生成（workflow 的 archive 分支已改）。
 
 ## 给接手 agent 的建议（按优先级）
 
