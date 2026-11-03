@@ -91,6 +91,16 @@ jobs:
       # `spektrafilm_constants.bin`. So the API is what asks for the tree
       # and what asks for each file, and it checks what came back.
       - name: Fetch the upstream engine
+        env:
+          # The runner's own token, which can read this public repository and
+          # nothing else. It is here because the API's **anonymous** limit is
+          # 60 requests an hour and the engine needs a few hundred: a request
+          # over the limit does not fail, it returns a tree with whatever was
+          # not fetched missing from it, which is a very quiet way to get a
+          # half an engine.
+          #
+          # With a token the limit is 5000 an hour.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           echo "fetching the engine at $UPSTREAM_COMMIT"
