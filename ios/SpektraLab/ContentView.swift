@@ -72,7 +72,7 @@ struct ContentView: View {
         }
         .alert("导出", isPresented: $showingExport) {
             Button("保存到相册") {
-                _ = Task { await model.exportToPhotos() }
+                _ = Task<Void, Never> { await model.exportToPhotos() }
             }
             Button("取消", role: .cancel) {}
         } message: {
@@ -87,7 +87,7 @@ struct ContentView: View {
         // is ambiguous between the `Task` initializers ("ambiguous use of
         // 'init(priority:operation:)'"); naming the priority picks one.
         .onChange(of: pickerItem) { _, newValue in
-            Task(priority: .userInitiated) {
+            Task<Void, Never>(priority: .userInitiated) {
                 await model.importPicked(newValue)
             }
         }
