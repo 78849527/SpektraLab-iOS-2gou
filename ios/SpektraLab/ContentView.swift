@@ -34,13 +34,20 @@ struct ContentView: View {
                     failureOverlay(failure)
                 }
             }
+            .navigationTitle("SpektraLab")
+            .navigationBarTitleDisplayMode(.inline)
+            // The toolbar is on the NavigationStack's content rather than on
+            // the ZStack, and it is a `ToolbarItemGroup` rather than a bare
+            // `.toolbar { ... }`: SwiftUI has several `toolbar` overloads, and
+            // with a plain one the compiler cannot tell which is meant and
+            // says "ambiguous use of 'toolbar(content:)'".
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItemGroup(placement: .topBarLeading) {
                     PhotosPicker(selection: $pickerItem, matching: .images) {
                         Label("导入", systemImage: "photo.on.rectangle")
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
                         showingExport = true
                     } label: {
@@ -49,8 +56,7 @@ struct ContentView: View {
                     .disabled(model.renderedTexture == nil)
                 }
             }
-            .navigationTitle("SpektraLab")
-            .navigationBarTitleDisplayMode(.inline)        }
+        }
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showingFilms) {
             StockPicker(title: "选择胶片", stocks: model.catalog.films + model.catalog.slides,
