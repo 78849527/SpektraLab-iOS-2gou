@@ -30,9 +30,13 @@
 
 ## 下载
 
-最新 IPA 每次构建都会更新：
+打开 **[latest release](https://github.com/Minerchu/SpektraLab-iOS/releases/latest)**，
+下载里面那个 `SpektraLab-<提交号>.ipa`。
 
-**[下载 SpektraLab.ipa](https://github.com/Minerchu/SpektraLab-iOS/releases/latest/download/SpektraLab.ipa)**
+文件名带提交号不是装饰。`releases/download/<tag>/<固定名>` 走 CDN，同名替换后
+一段时间内仍会返回**旧文件**——你会装上旧包，侧载时看到
+`Failed to get bundle ID`（旧包的 `Payload/` 目录结构和 Info.plist 都不对）。
+每次文件名都不同，就不会撞上这层缓存。
 
 未配签名 secret 时这个 IPA 需要你自己重签才能装到手机——见下面「装到手机上」一节。
 
