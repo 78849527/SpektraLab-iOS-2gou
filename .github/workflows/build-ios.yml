@@ -84,22 +84,16 @@ jobs:
           set -euo pipefail
           echo "fetching the engine at $UPSTREAM_COMMIT"
           rm -rf engine
-          # A git clone rather than a tarball.
+          # A plain full clone.
           #
-          # The tarball of this repository comes out **without
-          # engine/resources**: GitHub does not put the large blobs in it, so
-          # the extracted tree has an `engine` directory with no `resources`
-          # in it, and the build fails with "the upstream checkout has no
-          # engine/resources". The tree API says the files are in the commit,
-          # and a clone gets them.
-          #
-          # `--filter=blob:none` keeps the clone to the commit graph and
-          # fetches the blobs only for the commit that is checked out, which
-          # is most of the 140 MB of the upstream repository saved.
-          git clone --quiet --filter=blob:none --no-checkout \
-            https://github.com/JamesQiu2005/SpektraLab.git engine
+          # The tree API says the engine's resources are in the commit --
+          # 33 blobs under engine/resources -- and two other ways of getting
+          # the tree (a tarball, and a partial clone) both produced an
+          # `engine` directory with no `resources` in it. So this is a full
+          # clone with no filters and no depth: the plainest thing git can
+          # do, and the one whose result can be checked against the tree API.
+          git clone --quiet https://github.com/JamesQiu2005/SpektraLab.git engine
           cd engine
-          git fetch --quiet --depth 1 origin "$UPSTREAM_COMMIT"
           git checkout --quiet "$UPSTREAM_COMMIT"
           cd ..
           # What actually landed, so a failure here says what is there
