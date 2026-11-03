@@ -114,42 +114,29 @@ def request(url: str, token: str, raw: bool = False, tries: int = 5):
     raise last if last else RuntimeError("unreachable")
 
 
-def listing(repo: str, path: str, ref: str, token: str) -> list[dict]:
-    """One directory's contents, as the API lists it."""
-    url = f"{API}/repos/{repo}/contents/{path}?ref={ref}"
-    return request(url, token)
-
-
 def is_wanted(path: str) -> bool:
     if any(path.startswith(prefix) for prefix in SKIP_PREFIXES):
         return False
     return any(path.startswith(prefix) for prefix in WANTED)
 
 
-def fetch_file(repo: str, entry: dict, ref: str, token: str) -> bytes:
-    """One file's bytes, from the entry the listing gave."""
-    if entry.get("encoding") == "base64" and entry.get("content"):
-        return base64.b64decode(entry["content"])
-    # A file over 1 MB comes back without its content; its `download_url` is
-    # then the way in.
-    url = entry.get("download_url")
-    if url:
-        return request(url, token, raw=True)
-    url = f"{API}/repos/{repo}/contents/{entry['path']}?ref={ref}"
-    payload = request(url, token)
-    if payload.get("encoding") == "base64":
-        return base64.b64decode(payload["content"])
-    raise RuntimeError(f"no content for {entry['path']}")
+def fetch_blob(repo: str, sha: str, token: str) -> bytes:
+    """One blob's bytes, by sha, through the Git Data API.
 
+    Not `download_url`, which is raw.githubusercontent.com: it answers **404**
+    when it is rate limiting, and a 404 from there is indistinguishable from
+    "this file is not in the commit". That is exactly how a partial fetch came
+    to look like a complete one -- the fetch died at 141/239 with
+    `HTTP Error 404: Not Found` and nothing to say which file or why.
 
-def walk(repo: str, path: str, ref: str, token: str, out: list[tuple[str, dict]]):
-    """Every file under `path`, as (path, listing entry) pairs."""
-    for entry in listing(repo, path, ref, token):
-        if entry["type"] == "dir":
-            if is_wanted(entry["path"]):
-                walk(repo, entry["path"], ref, token, out)
-        elif entry["type"] == "file" and is_wanted(entry["path"]):
-            out.append((entry["path"], entry))
+    The blob endpoint is authenticated against the token's 5000/hour budget,
+    returns base64 for any blob up to 100 MB, and cannot 404 for a sha that
+    the tree itself just listed.
+    """
+    payload = request(f"{API}/repos/{repo}/git/blobs/{sha}", token)
+    if payload.get("encoding") != "base64":
+        raise RuntimeError(f"blob {sha[:12]} came back as {payload.get('encoding')}")
+    return base64.b64decode(payload["content"])
 
 
 def main() -> None:
@@ -178,20 +165,30 @@ def main() -> None:
                 if entry["type"] == "blob" and is_wanted(entry["path"])}
     print(f"  the tree has {len(expected)} engine files", flush=True)
 
-    # The files themselves, a directory at a time.
-    found: list[tuple[str, dict]] = []
-    for prefix in WANTED:
-        walk(repo, prefix, commit, token, found)
+    # The bytes, one blob at a time, keyed by the sha the tree gave. The tree
+    # is the only authority used here -- no directory listings, no
+    # `download_url` -- so a rate-limited raw endpoint cannot turn into a
+    # silently incomplete tree.
+    found: list[dict] = sorted(
+        (entry for entry in tree["tree"]
+         if entry["type"] == "blob" and is_wanted(entry["path"])),
+        key=lambda entry: entry["path"],
+    )
 
     destination.mkdir(parents=True, exist_ok=True)
     written = 0
     total = 0
-    for index, (path, entry) in enumerate(found, 1):
-        target = destination / path
+    for index, entry in enumerate(found, 1):
+        target = destination / entry["path"]
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(fetch_file(repo, entry, commit, token))
+        data = fetch_blob(repo, entry["sha"], token)
+        expected_size = entry.get("size")
+        if expected_size is not None and len(data) != expected_size:
+            raise SystemExit(
+                f"{entry['path']}: {len(data)} bytes, the tree says {expected_size}")
+        target.write_bytes(data)
         written += 1
-        total += target.stat().st_size
+        total += len(data)
         if index % 20 == 0 or index == len(found):
             print(f"  {index}/{len(found)} files, {total / 1048576:.1f} MB", flush=True)
 
