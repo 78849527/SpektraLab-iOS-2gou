@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+#
+#  build-ipa.sh — build a signed IPA on a Mac, in one command.
+#
+#  Usage:
+#      ios/Tools/build-ipa.sh                 # archive + export, signed
+#      ios/Tools/build-ipa.sh --unsigned      # archive only, no signing
+#
+#  This is the local counterpart of `.github/workflows/build-ios.yml`: the same
+#  steps, in the same order, on a machine that has Xcode. The CI is there for
+#  people who do not have a Mac; this is here for people who do, and for the
+#  case where the CI cannot reach a private certificate.
+#
+#  The signing material is expected in the environment:
+#
+#      SPEKTRAFILM_SIGN_IDENTITY="Apple Development: Name (TEAMID)"
+#      SPEKTRAFILM_TEAM_ID=TEAMID
+#      SPEKTRAFILM_PROVISIONING_PROFILE="My Profile Name"
+#      SPEKTRAFILM_BUNDLE_ID=com.hanze.spektralab
+#
+#  and the certificate and the profile installed into the keychain already
+#  (Xcode's "Manage Certificates" does that, or `security import` does it by
+#  hand). Without them the build is ad-hoc and the IPA will not install.
+
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$here/../.." && pwd)"
+cd "$root"
+
+unsigned=0
+if [ "${1:-}" = "--unsigned" ]; then
+  unsigned=1
+fi
+
+if ! command -v xcodebuild >/dev/null 2>&1; then
+  echo "error: xcodebuild is not on the PATH. This script needs a Mac with Xcode." >&2
+  exit 1
+fi
+
+echo "==> the engine, for iOS"
+python3 tools/apply-ios-patch.py engine
+
+echo "==> the engine's kernels and resources"
+ios/Tools/build-engine.sh bundle
+
+echo "==> the app icon (needs Pillow; skipped with a warning if absent)"
+if python3 -c "import PIL" >/dev/null 2>&1; then
+  python3 tools/make-app-icon.py
+else
+  echo "warning: Pillow is not installed (pip install Pillow); the app will ship without a custom icon." >&2
+fi
+
+echo "==> the Xcode project"
+python3 ios/Tools/gen-project.py
+
+echo "==> the archive"
+mkdir -p build
+set -o pipefail
+xcodebuild -project ios/SpektraLab.xcodeproj \
+  -target SpektraLab \
+  -configuration Release \
+  -derivedDataPath build/DerivedData \
+  -destination "generic/platform=iOS" \
+  -archivePath build/SpektraLab.xcarchive \
+  archive 2>&1 | tee build/xcodebuild.log
+
+if [ "$unsigned" -eq 1 ]; then
+  echo "==> done (unsigned). The archive is at build/SpektraLab.xcarchive"
+  exit 0
+fi
+
+echo "==> the IPA"
+mkdir -p build/ipa
+bundle="${SPEKTRAFILM_BUNDLE_ID:-com.hanze.spektralab}"
+cat > build/ExportOptions.plist <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>method</key>
+  <string>development</string>
+  <key>teamID</key>
+  <string>${SPEKTRAFILM_TEAM_ID:-}</string>
+  <key>signingStyle</key>
+  <string>manual</string>
+  <key>provisioningProfiles</key>
+  <dict>
+    <key>${bundle}</key>
+    <string>${SPEKTRAFILM_PROVISIONING_PROFILE:-}</string>
+  </dict>
+</dict>
+</plist>
+PLIST
+
+xcodebuild -exportArchive \
+  -archivePath build/SpektraLab.xcarchive \
+  -exportOptionsPlist build/ExportOptions.plist \
+  -exportPath build/ipa 2>&1 | tee build/export.log
+
+echo ""
+echo "the IPA is at:"
+ls -la build/ipa
