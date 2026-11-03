@@ -25,6 +25,7 @@
 //  rather than silently rendered wrong.
 
 import Foundation
+import CoreImage
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
@@ -84,6 +85,22 @@ enum ImageDecoder {
     /// - Parameter maxLongEdge: the long edge to scale to, or `nil` for no
     ///   scaling (the export path).
     static func decode(data: Data, maxLongEdge: Int?) throws -> DecodedFrame {
+        // RAW first. `CIRAWFilter` is what the macOS app uses, and it covers
+        // far more camera formats than ImageIO's `CGImageSource`, whose RAW
+        // support depends on the format and on the iOS version. For anything
+        // that is not RAW this returns nil and the path below runs unchanged.
+        if let raw = CIRAWFilter(imageData: data) {
+            // The engine wants linear ProPhoto; the filter hands back the
+            // camera's own primaries with its own tone curve applied. Turning
+            // the boost off keeps the frame closer to what the sensor saw.
+            raw.boostAmount = 0
+            raw.extendedDynamicRangeAmount = 0
+            if let output = raw.outputImage,
+               let rendered = CIContext().createCGImage(output, from: output.extent) {
+                return try decode(cgImage: rendered, maxLongEdge: maxLongEdge)
+            }
+        }
+
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
             throw DecodeError.unreadable("not an image this system recognises")
         }

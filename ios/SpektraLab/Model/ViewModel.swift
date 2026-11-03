@@ -292,7 +292,6 @@ final class ViewModel: ObservableObject {
             }
         }
 
-        let previous = state
         state = .rendering
 
         do {
@@ -319,13 +318,13 @@ final class ViewModel: ObservableObject {
             statusText = String(format: "渲染完成 · %.0f ms · %d×%d",
                                 result.elapsedMs, result.width, result.height)
         } catch {
+            // The state stays `.failed`. It used to be forced back to `.ready`
+            // right here, which is the worst possible outcome: no error shown,
+            // `renderedTexture` nil, and every slider disabled with no
+            // explanation.
             state = .failed(error.localizedDescription)
-            statusText = "渲染失败"
+            statusText = "渲染失败：\(error.localizedDescription)"
         }
-        // `if case`, not `==`: `.failed` carries a message, so the case
-        // pattern is what matches it. Written as `==` the compiler looks for
-        // an `==` that takes a `.failed` and finds none.
-        if case .failed = previous { state = .ready }
     }
 
     // MARK: - exporting

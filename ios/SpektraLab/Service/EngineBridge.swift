@@ -27,7 +27,7 @@ import Metal
 // MARK: - Errors
 
 /// What the engine said, in the engine's own words.
-enum EngineError: Error, CustomStringConvertible {
+enum EngineError: Error, LocalizedError, CustomStringConvertible {
     /// `spk_status` was negative. `status` is the raw code; `message` is
     /// `spk_last_error`, which is never NULL.
     case failed(status: Int32, message: String)
@@ -39,6 +39,14 @@ enum EngineError: Error, CustomStringConvertible {
     case noDevice
     /// A JSON reply from the engine did not decode.
     case badReply(String)
+
+    /// What `error.localizedDescription` returns.
+    ///
+    /// Without this conformance every failure surfaced as
+    /// "The operation couldn't be completed. (SpektraLab.EngineError error 0.)"
+    /// -- the engine's own message, which is the only useful part, was thrown
+    /// away, and the UI had nothing to show.
+    var errorDescription: String? { description }
 
     var description: String {
         switch self {
