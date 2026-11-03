@@ -248,6 +248,7 @@ jobs:
           python3 ios/Tools/gen-project.py
           mkdir -p build
           set -o pipefail
+          set +e
           xcodebuild -project ios/SpektraLab.xcodeproj \
             -scheme SpektraLab \
             -configuration Release \
@@ -255,6 +256,16 @@ jobs:
             -destination "generic/platform=iOS" \
             -archivePath build/SpektraLab.xcarchive \
             archive 2>&1 | tee build/xcodebuild.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "=== diagnostic: CFBundleIdentifier in the built app ==="
+            find build -path '*SpektraLab.app/Info.plist' -print \
+              -exec python3 -c "import plistlib,sys; print(plistlib.load(open(sys.argv[1],'rb')).get('CFBundleIdentifier'))" {} \;
+            echo "=== source Info.plist ==="
+            python3 -c "import plistlib; print(plistlib.load(open('ios/SpektraLab/Info.plist','rb')).get('CFBundleIdentifier'))"
+            exit $rc
+          fi
           echo "the archive is at build/SpektraLab.xcarchive"
 
       - name: Export the IPA
