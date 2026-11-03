@@ -79,38 +79,24 @@ jobs:
       # only when it is reachable from a ref, and a shallow fetch of an
       # arbitrary SHA comes back without the tree. The tarball is the same
       # bytes with none of that.
+      # The engine is upstream's, and it is not in this repository: this one
+      # carries the app, the patch and the build scripts, and the engine comes
+      # from the upstream project at a pinned commit.
+      #
+      # Through the API rather than through git. Four different ways of
+      # fetching the tree -- a tarball, a shallow clone, a partial clone and
+      # a full clone -- all produced a tree with an `engine` directory and no
+      # `resources` in it, while the tree API says the commit has 33 blobs
+      # under `engine/resources` including the 9.4 MB
+      # `spektrafilm_constants.bin`. So the API is what asks for the tree
+      # and what asks for each file, and it checks what came back.
       - name: Fetch the upstream engine
         run: |
           set -euo pipefail
           echo "fetching the engine at $UPSTREAM_COMMIT"
           rm -rf engine
-          # A plain full clone.
-          #
-          # The tree API says the engine's resources are in the commit --
-          # 33 blobs under engine/resources -- and two other ways of getting
-          # the tree (a tarball, and a partial clone) both produced an
-          # `engine` directory with no `resources` in it. So this is a full
-          # clone with no filters and no depth: the plainest thing git can
-          # do, and the one whose result can be checked against the tree API.
-          git clone --quiet https://github.com/JamesQiu2005/SpektraLab.git engine
-          cd engine
-          git checkout --quiet "$UPSTREAM_COMMIT"
-          cd ..
-          # What actually landed, so a failure here says what is there
-          # rather than only what is missing.
-          echo "the tree's top level:"
-          ls engine
-          if [ ! -f engine/resources/spektrafilm_constants.bin ]; then
-            echo "::error::no engine/resources/spektrafilm_constants.bin in the upstream tree"
-            echo "::error::engine/resources holds:"
-            ls -la engine/resources 2>&1 || true
-            exit 1
-          fi
-          if [ ! -f engine/include/spektrafilm/spk_engine.h ]; then
-            echo "::error::no engine/include/spektrafilm/spk_engine.h in the upstream tree"
-            exit 1
-          fi
-          echo "the engine is in place: $(find engine/src -name '*.cpp' | wc -l | tr -d ' ') sources"
+          python3 tools/fetch-engine.py \
+            JamesQiu2005/SpektraLab "$UPSTREAM_COMMIT" .
 
       # The product profiles -- the black-and-white stocks measured for this
       # project -- are in the upstream tree already (engine/resources_product),
