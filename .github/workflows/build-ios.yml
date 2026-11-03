@@ -150,9 +150,18 @@ jobs:
       - name: App icon
         run: |
           set -euo pipefail
-          python3 -c "import PIL" 2>/dev/null || pip3 install --quiet Pillow
-          python3 tools/make-app-icon.py \
-            || echo "::warning::Pillow unavailable; the app ships without a custom icon."
+          # A virtual environment, because the runner's Python is
+          # Homebrew's and refuses a `pip install` into itself: PEP 668 says
+          # an externally-managed environment is not to be modified, and
+          # `pip install Pillow` there is an error rather than a warning.
+          # `--break-system-packages` would work and is not worth it.
+          if ! python3 -c "import PIL" 2>/dev/null; then
+            python3 -m venv /tmp/icon-venv
+            /tmp/icon-venv/bin/pip install --quiet Pillow
+            /tmp/icon-venv/bin/python tools/make-app-icon.py
+          else
+            python3 tools/make-app-icon.py
+          fi
 
       # The project file is generated from the filesystem, like the upstream
       # macOS project generates its own. Generating it here means the CI
