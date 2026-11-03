@@ -361,18 +361,93 @@ def build() -> str:
             f"\trootObject = {project} /* Project object */;\n}}\n")
 
 
+def scheme(text: str) -> str:
+    """The shared scheme, which `xcodebuild` needs for `-archivePath`.
+
+    A generated project has no scheme unless something writes one, and
+    `xcodebuild` insists on a scheme for anything that names an output path:
+    "-archivePath is required when not using -exportArchive" and
+    "-derivedDataPath" wants one too.
+
+    The scheme's `BlueprintIdentifier` is the target's id, which is a sha1 of
+    a fixed string -- so it is the same on every machine and does not have to
+    be read back out of the project file.
+    """
+    target = uid("target:app")
+    product = uid("product:app")
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<Scheme LastUpgradeVersion = "1600" version = "1.7">
+   <BuildAction parallelizeBuildables = "YES" buildImplicitDependencies = "YES">
+      <BuildActionEntries>
+         <BuildActionEntry buildForTesting = "YES" buildForRunning = "YES" buildForProfiling = "YES" buildForArchiving = "YES" buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "{target}"
+               BuildableName = "{APP}.app"
+               BlueprintName = "{APP}"
+               ReferencedContainer = "container:{APP}.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+      </BuildActionEntries>
+   </BuildAction>
+   <TestAction buildConfiguration = "Debug" selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv = "YES">
+      <Testables>
+      </Testables>
+   </TestAction>
+   <LaunchAction buildConfiguration = "Debug" selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB" launchStyle = "0" useCustomWorkingDirectory = "NO" ignoresPersistentStateOnLaunch = "NO" debugDocumentVersioning = "YES" debugServiceExtension = "internal" allowLocationSimulation = "YES">
+      <BuildableProductRunnable runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "{target}"
+            BuildableName = "{APP}.app"
+            BlueprintName = "{APP}"
+            ReferencedContainer = "container:{APP}.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+   </LaunchAction>
+   <ProfileAction buildConfiguration = "Release" shouldUseLaunchSchemeArgsEnv = "YES" savedToolIdentifier = "" useCustomWorkingDirectory = "NO" debugDocumentVersioning = "YES">
+      <BuildableProductRunnable runnableDebuggingMode = "0">
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "{target}"
+            BuildableName = "{APP}.app"
+            BlueprintName = "{APP}"
+            ReferencedContainer = "container:{APP}.xcodeproj">
+         </BuildableReference>
+      </BuildableProductRunnable>
+   </ProfileAction>
+   <AnalyzeAction buildConfiguration = "Debug"></AnalyzeAction>
+   <ArchiveAction buildConfiguration = "Release" revealArchiveInOrganizer = "YES"></ArchiveAction>
+</Scheme>
+"""
+
+
 def main() -> None:
     out = ROOT / f"{APP}.xcodeproj" / "project.pbxproj"
     text = build()
+    scheme_text = scheme(text)
+    scheme_dir = ROOT / f"{APP}.xcodeproj" / "xcshareddata" / "xcschemes"
+    scheme_path = scheme_dir / f"{APP}.xcscheme"
+
     if "--check" in sys.argv:
+        stale = False
         if not out.exists() or out.read_text(encoding="utf-8") != text:
             print("project.pbxproj is stale; run ios/Tools/gen-project.py")
+            stale = True
+        if not scheme_path.exists() or scheme_path.read_text(encoding="utf-8") != scheme_text:
+            print(f"{APP}.xcscheme is stale; run ios/Tools/gen-project.py")
+            stale = True
+        if stale:
             sys.exit(1)
-        print("project.pbxproj is current")
+        print("project.pbxproj and the scheme are current")
         return
+
     out.parent.mkdir(exist_ok=True)
     out.write_text(text, encoding="utf-8")
     print(f"wrote {out}")
+    scheme_dir.mkdir(parents=True, exist_ok=True)
+    scheme_path.write_text(scheme_text, encoding="utf-8")
+    print(f"wrote {scheme_path}")
 
 
 if __name__ == "__main__":

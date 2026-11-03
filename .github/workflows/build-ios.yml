@@ -232,9 +232,11 @@ jobs:
       # The project is regenerated with the signing settings, so the same
       # committed file builds both signed and unsigned.
       #
-      # `-target`, not `-scheme`: the project is generated, and the generator
-      # writes a target rather than a scheme. `xcodebuild -scheme` on a
-      # project with no scheme says "scheme not found" and stops.
+      # `-scheme`, because `xcodebuild` insists on one for anything that
+      # names an output path: "-archivePath is required when not using
+      # -exportArchive", and `-derivedDataPath` wants one too. The scheme is
+      # written by `ios/Tools/gen-project.py` next to the project, because a
+      # generated project has no scheme unless something writes one.
       - name: Build
         env:
           SPEKTRAFILM_SIGN_IDENTITY: ${{ secrets.IOS_CERTIFICATE_IDENTITY }}
@@ -247,7 +249,7 @@ jobs:
           mkdir -p build
           set -o pipefail
           xcodebuild -project ios/SpektraLab.xcodeproj \
-            -target SpektraLab \
+            -scheme SpektraLab \
             -configuration Release \
             -derivedDataPath build/DerivedData \
             -destination "generic/platform=iOS" \
