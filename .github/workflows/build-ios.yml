@@ -350,14 +350,30 @@ jobs:
           mkdir -p build/Payload
           cp -R "$app" build/Payload/SpektraLab.app
 
-          # Ad-hoc: no identity, no profile. Enough to make the bundle a
-          # well-formed signed package; not enough to install on a device.
-          codesign --force --sign - --timestamp=none build/Payload/SpektraLab.app
-          codesign -dv build/Payload/SpektraLab.app 2>&1 || true
+          # Ad-hoc: no identity, no profile. A device refuses to install this
+          # either way, so the signature seals resources and nothing more --
+          # it is a nicety, not a gate, and a failure warns instead of
+          # throwing away an artifact that took forty minutes to build.
+          #
+          # The nicety is why the libraries are signed first: codesign walks a
+          # bundle's nested code before sealing the bundle, and refuses to seal
+          # one containing an unsigned code object. Xcode drops the app's own
+          # `default.metallib` -- compiled from Canvas.metal -- at the bundle
+          # root, and codesign sniffs it as one.
+          find build/Payload/SpektraLab.app -name '*.metallib' -print0 |
+          while IFS= read -r -d '' lib; do
+            codesign --force --sign - --timestamp=none "$lib" \
+              || echo "  not signable: $lib"
+          done
+          if codesign --force --sign - --timestamp=none build/Payload/SpektraLab.app; then
+            codesign -dv build/Payload/SpektraLab.app 2>&1 | sed 's/^/  /'
+          else
+            echo "::warning::ad-hoc codesign failed; the IPA ships with no signature at all"
+          fi
 
           (cd build && ditto -c -k --keepParent Payload ipa/SpektraLab-unsigned.ipa)
           ls -la build/ipa
-          echo "::notice::SpektraLab-unsigned.ipa is ad-hoc signed: install it by re-signing with your own Apple ID (AltStore/Xcode), or set the seven signing secrets to get a device-installable IPA."
+          echo "::notice::SpektraLab-unsigned.ipa is not device-installable: re-sign it with your own Apple ID (AltStore/Sideloadly/Xcode), or set the seven signing secrets to get a signed export."
 
       - name: Upload the IPA
         if: always()
