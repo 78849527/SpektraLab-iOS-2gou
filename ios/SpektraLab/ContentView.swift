@@ -78,13 +78,18 @@ struct ContentView: View {
         } message: {
             Text("将以原始分辨率重新渲染并保存到相册。")
         }
-        // `_ = Task { ... }` rather than `Task { ... }`: `onChange`'s closure
-        // returns `Void`, and a bare `Task { ... }` expression leaves the
-        // compiler choosing between the standard library's `Task(priority:
-        // operation:)` and SwiftUI's own, which is "ambiguous use of
-        // 'init(priority:operation:)".
-        .onChange(of: pickerItem) { _, newValue in
-            _ = Task { await model.importPicked(newValue) }
+        // Keyed on `pickerItem?.id` (`String?`, always `Equatable`) rather
+        // than on `pickerItem` itself: `PhotosPickerItem` is not `Equatable`
+        // in this SDK, so `onChange(of: pickerItem)` left the closure's
+        // parameter type unresolved and the compiler then reported a
+        // spurious "ambiguous use of 'init(priority:operation:)'". With a
+        // concrete key the closure types resolve, and the `Task(priority:)`
+        // form picks a single initializer.
+        .onChange(of: pickerItem?.id) { _, _ in
+            guard let item = pickerItem else { return }
+            Task(priority: .userInitiated) {
+                await model.importPicked(item)
+            }
         }
     }
 
