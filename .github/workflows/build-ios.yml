@@ -443,7 +443,13 @@ jobs:
           # pass -- the metallibs, `Assets.car`, anything a future Xcode adds.
           # Hand-listing them was whack-a-mole: sealing the metallibs simply
           # moved the refusal on to `Assets.car`.
-          if codesign --force --deep --sign - --timestamp=none "$app_dir" 2>&1 | sed 's/^/  /'
+          # `--identifier` so the seal carries `com.hanze.spektralab`, the
+          # same string as CFBundleIdentifier. Without it codesign invents
+          # `SpektraLab-<uuid>`, and a re-signer that reads the identifier
+          # out of the existing signature then acts on the wrong one.
+          app_id=$(plutil -extract CFBundleIdentifier raw - < "$app_dir/Info.plist")
+          if codesign --force --deep --sign - --timestamp=none \
+               --identifier "$app_id" "$app_dir" 2>&1 | sed 's/^/  /'
           then
             echo "sealed the bundle ad-hoc"
           else
