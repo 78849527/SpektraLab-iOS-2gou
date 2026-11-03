@@ -93,8 +93,19 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
         // keeps the app's own drawing code out of the engine's build (which
         // compiles its kernels with safe-math and must not inherit the app's
         // fast-math setting — RFC-014 §5.1 trap 1).
-        guard let library = device.makeDefaultLibrary(bundle: .main),
-              let vertex = library.makeFunction(name: "canvasVertex"),
+        //
+        // `makeDefaultLibrary` **throws** and is not optional on iOS: it
+        // returns `any MTLLibrary` and raises an Objective-C exception when
+        // the metallib is missing, which Swift cannot catch. So it is called
+        // with `try` and the do/catch turns the failure into "no renderer",
+        // which the view model already knows how to report.
+        let library: MTLLibrary
+        do {
+            library = try device.makeDefaultLibrary(bundle: .main)
+        } catch {
+            return nil
+        }
+        guard let vertex = library.makeFunction(name: "canvasVertex"),
               let fragment = library.makeFunction(name: "canvasFragment") else {
             return nil
         }
