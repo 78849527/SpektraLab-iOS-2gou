@@ -306,10 +306,13 @@ def build() -> str:
              # A Debug build goes to a simulator or a device, not to a
              # distribution, so it does not need a provisioning profile.
              "CODE_SIGNING_ALLOWED": "YES"}
+    # No VALIDATE_PRODUCT: it makes `archive` run builtin-validationUtility,
+    # which cannot validate an app on a runner with no signing certificate and
+    # fails with the misleading "Archive Missing Bundle Identifier". Export
+    # validates/signs later, where it has the ExportOptions to do so.
     release = {"SWIFT_OPTIMIZATION_LEVEL": '"-O"', "DEBUG_INFORMATION_FORMAT": '"dwarf-with-dsym"',
                "SWIFT_COMPILATION_MODE": "wholemodule",
-               "ONLY_ACTIVE_ARCH": "NO",
-               "VALIDATE_PRODUCT": "YES"}
+               "ONLY_ACTIVE_ARCH": "NO"}
 
     def cfg_list(tag: str, settings: dict) -> str:
         d = cfg(tag, "Debug", settings, debug)
