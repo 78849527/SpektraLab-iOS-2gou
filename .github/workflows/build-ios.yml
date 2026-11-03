@@ -474,7 +474,13 @@ jobs:
           fi
           ls -la "$app_dir/_CodeSignature" || true
 
-          (cd build && ditto -c -k --keepParent Payload ipa/SpektraLab.ipa)
+          # `--norsrc --noextattr --noqtn`: sealing writes extended
+          # attributes onto the metallibs and `Assets.car`, and a plain
+          # `ditto -c -k` turns each one into an AppleDouble `._*` entry in
+          # the zip. On the device those unpack as real files beside the
+          # originals, and the seal then does not match what is there.
+          (cd build && ditto -c -k --keepParent --norsrc --noextattr --noqtn \
+             Payload ipa/SpektraLab.ipa)
           ls -la build/ipa
 
           # Check the archive itself rather than the staging directory: the
