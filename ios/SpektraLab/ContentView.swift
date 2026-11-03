@@ -21,40 +21,17 @@ struct ContentView: View {
     @State private var showingExport = false
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
+        ZStack(alignment: .top) {
+            Color.black.ignoresSafeArea()
 
-                VStack(spacing: 0) {
-                    picture
-                    controls
-                }
-
-                if let failure = failureMessage {
-                    failureOverlay(failure)
-                }
+            VStack(spacing: 0) {
+                topBar
+                picture
+                controls
             }
-            .navigationTitle("SpektraLab")
-            .navigationBarTitleDisplayMode(.inline)
-            // The toolbar is on the NavigationStack's content rather than on
-            // the ZStack, and it is a `ToolbarItemGroup` rather than a bare
-            // `.toolbar { ... }`: SwiftUI has several `toolbar` overloads, and
-            // with a plain one the compiler cannot tell which is meant and
-            // says "ambiguous use of 'toolbar(content:)'".
-            .toolbar {
-                ToolbarItemGroup(placement: .topBarLeading) {
-                    PhotosPicker(selection: $pickerItem, matching: .images) {
-                        Label("导入", systemImage: "photo.on.rectangle")
-                    }
-                }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        showingExport = true
-                    } label: {
-                        Label("导出", systemImage: "square.and.arrow.up")
-                    }
-                    .disabled(model.renderedTexture == nil)
-                }
+
+            if let failure = failureMessage {
+                failureOverlay(failure)
             }
         }
         .preferredColorScheme(.dark)
@@ -82,15 +59,41 @@ struct ContentView: View {
         // is `Equatable` (so the two-argument closure types resolve -- the
         // earlier failure was the `Task` inside it, not the `onChange`), but
         // it is not `Identifiable`, so `pickerItem?.id` does not exist. The
-        // `Task` is written `Task(priority:)` rather than a bare `Task { }`:
-        // inside the `@Sendable` `onChange` closure the trailing-closure form
-        // is ambiguous between the `Task` initializers ("ambiguous use of
-        // 'init(priority:operation:)'"); naming the priority picks one.
+        // `Task` is written `Task<Void, Never>(priority:)` rather than a bare
+        // `Task { }`: inside the `@Sendable` `onChange` closure the compiler
+        // cannot infer the `Success` type of a bare `Task`, so it reports
+        // "ambiguous use of 'init(priority:operation:)'". Pinning the generic
+        // arguments picks a single initializer.
         .onChange(of: pickerItem) { _, newValue in
             Task<Void, Never>(priority: .userInitiated) {
                 await model.importPicked(newValue)
             }
         }
+    }
+
+    // A plain HStack rather than `.toolbar { ... }`: iOS 17 has two
+    // `toolbar(content:)` overloads (one taking a plain `View`, one a
+    // `ToolbarContent` builder), and a bare toolbar here made the
+    // compiler say "ambiguous use of 'toolbar(content:)'". An HStack
+    // has no overload to be ambiguous about.
+    private var topBar: some View {
+        HStack(spacing: 12) {
+            PhotosPicker(selection: $pickerItem, matching: .images) {
+                Label("导入", systemImage: "photo.on.rectangle")
+            }
+            Spacer()
+            Text("SpektraLab").font(.headline.weight(.semibold))
+            Spacer()
+            Button {
+                showingExport = true
+            } label: {
+                Label("导出", systemImage: "square.and.arrow.up")
+            }
+            .disabled(model.renderedTexture == nil)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color(white: 0.06))
     }
 
     // MARK: - the picture
