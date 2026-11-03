@@ -392,23 +392,59 @@ jobs:
           ditto --norsrc --noextattr --noqtn "$app" build/Payload/SpektraLab.app
           find build/Payload -name '._*' -print -quit
 
-          # Xcode's seal is the one that works here. A hand-run `codesign`
-          # refuses this bundle because it sniffs `Assets.car` and
-          # `default.metallib` as unsigned nested code, while Xcode's CodeSign
-          # phase seals bundles containing exactly those files every day -- so
-          # the seal is asked for in the build step, and verified here.
-          if codesign --verify --verbose=1 build/Payload/SpektraLab.app 2>&1 | sed 's/^/  /'
-          then
-            echo "the bundle is sealed by Xcode: the bundle id is readable from the signature"
-          else
-            echo "::warning::the bundle has no signature; the IPA must be re-signed before a device will take it"
-            # With no seal there is nothing to break. Xcode writes Info.plist
-            # as a *binary* plist; iOS reads either form, but a service that
-            # scrapes the bundle id out of the file as text reads nothing and
-            # reports "Missing bundle ID", so the unsigned artifact ships XML.
-            plutil -convert xml1 build/Payload/SpektraLab.app/Info.plist
-            echo "Info.plist now starts with: $(head -c 38 build/Payload/SpektraLab.app/Info.plist)"
+          app_dir=build/Payload/SpektraLab.app
+          exe=$(plutil -extract CFBundleExecutable raw - < "$app_dir/Info.plist")
+
+          # Every file in a bundle except the main executable is data. Xcode's
+          # metal and asset-compile steps leave `default.metallib` and
+          # `Assets.car` with the executable bit set, and codesign reads an
+          # executable file inside a bundle as *nested code* -- unsigned nested
+          # code is what it refuses to seal ("code object is not signed at all /
+          # In subcomponent: ..."). Clearing the bit is the fix; signing those
+          # two files by hand only moves the refusal to the next one.
+          find "$app_dir" -type f ! -path "$app_dir/$exe" -exec chmod a-x {} +
+          chmod a+x "$app_dir/$exe"
+
+          # Info.plist goes XML before the seal, not after: rewriting a sealed
+          # file breaks the seal. iOS reads either form, but a service that
+          # scrapes the bundle id out of the file as text reads nothing from a
+          # binary plist and reports "Missing bundle ID".
+          plutil -convert xml1 "$app_dir/Info.plist"
+          echo "Info.plist starts with: $(head -c 38 "$app_dir/Info.plist")"
+
+          # A bundle with no `_CodeSignature` is an incomplete app bundle: a
+          # re-signer reads the identifier out of the existing signature to know
+          # what it is replacing, and an installer handed a bare directory
+          # reports the bundle id as missing. Xcode skips its CodeSign phase
+          # without signing material (and `AD_HOC_CODE_SIGNING_ALLOWED` does not
+          # change that), so the seal is made here instead.
+          if [ -d "$app_dir/Frameworks" ]; then
+            find "$app_dir/Frameworks" -depth \
+              \( -name '*.framework' -o -name '*.appex' -o -name '*.dylib' \) -print0 |
+            while IFS= read -r -d '' nested; do
+              codesign --force --sign - --timestamp=none "$nested" || exit 1
+            done
           fi
+          if codesign --force --sign - --timestamp=none "$app_dir" 2>&1 | sed 's/^/  /'
+          then
+            echo "sealed the bundle ad-hoc"
+          else
+            echo "::warning::could not seal the bundle; the IPA stays re-signable but structurally bare"
+          fi
+
+          # The identifier the seal carries is the one an installer will look
+          # for, so it has to be the same string as CFBundleIdentifier.
+          bundle_id=$(plutil -extract CFBundleIdentifier raw - < "$app_dir/Info.plist")
+          sealed_id=$(codesign -dv --verbose=4 "$app_dir" 2>&1 | sed -n 's/^Identifier=//p')
+          echo "bundle id:   $bundle_id"
+          echo "sealed id:   ${sealed_id:-<none>}"
+          codesign --verify --verbose=2 "$app_dir" 2>&1 | sed 's/^/  /'
+          if [ "$sealed_id" = "$bundle_id" ]; then
+            echo "the seal and Info.plist agree"
+          else
+            echo "::warning::the seal identifies '${sealed_id:-<none>}' but CFBundleIdentifier is '$bundle_id'"
+          fi
+          ls -la "$app_dir/_CodeSignature" || true
 
           (cd build && ditto -c -k --keepParent Payload ipa/SpektraLab.ipa)
           ls -la build/ipa
@@ -423,6 +459,15 @@ jobs:
           echo "shipped bundle id: $(plutil -extract CFBundleIdentifier raw - < build/shipped.plist)"
           echo "shipped executable: $(plutil -extract CFBundleExecutable raw - < build/shipped.plist)"
           echo "shipped minimum iOS: $(plutil -extract MinimumOSVersion raw - < build/shipped.plist)"
+          # Checked in the zip, not the staging directory: this is the file a
+          # re-signer and an installer each look for, and a seal that did not
+          # make it into `Payload/` is the same as no seal at all.
+          if unzip -l build/ipa/SpektraLab.ipa | grep -q '_CodeSignature/CodeResources'
+          then
+            echo "the archive carries the code signature"
+          else
+            echo "::warning::the archive has no _CodeSignature; SideStore and other re-signers expect one"
+          fi
           echo "::notice::build/ipa/SpektraLab.ipa is not device-installable as it stands: re-sign it with your own Apple ID (AltStore/Sideloadly/Xcode), or set the seven signing secrets to get a signed export."
 
       - name: Upload the IPA
