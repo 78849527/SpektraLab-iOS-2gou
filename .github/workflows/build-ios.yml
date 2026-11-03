@@ -439,7 +439,11 @@ jobs:
             codesign --force --sign - --timestamp=none "$lib" 2>&1 | sed 's/^/    /' || true
           done
 
-          if codesign --force --sign - --timestamp=none "$app_dir" 2>&1 | sed 's/^/  /'
+          # `--deep` seals every nested code object the bundle contains in one
+          # pass -- the metallibs, `Assets.car`, anything a future Xcode adds.
+          # Hand-listing them was whack-a-mole: sealing the metallibs simply
+          # moved the refusal on to `Assets.car`.
+          if codesign --force --deep --sign - --timestamp=none "$app_dir" 2>&1 | sed 's/^/  /'
           then
             echo "sealed the bundle ad-hoc"
           else
