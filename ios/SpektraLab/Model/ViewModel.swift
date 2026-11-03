@@ -24,7 +24,14 @@ final class ViewModel: ObservableObject {
 
     // MARK: - what the app shows
 
-    enum State: Equatable {
+    /// The app's state.
+    ///
+    /// Named  rather than : inside a SwiftUI view, 
+    /// is SwiftUI's own property-wrapper type, and a nested type of the same
+    /// name makes every  in the file ambiguous -- the compiler
+    /// resolves it to some other  in scope and reports a type error
+    /// about a gesture phase, which is nowhere near the problem.
+    enum AppState: Equatable {
         case empty
         case importing
         case rendering
@@ -32,9 +39,17 @@ final class ViewModel: ObservableObject {
         case failed(String)
     }
 
-    @Published private(set) var state: State = .empty
+    @Published private(set) var state: AppState = .empty
     @Published private(set) var statusText = ""
     @Published private(set) var renderedTexture: MTLTexture?
+
+    /// What identifies the current render.
+    ///
+    /// The engine gives every render a progress id, and it is a new string
+    /// each time -- so it is what tells SwiftUI that the picture changed.
+    /// The texture itself cannot:  is not , and its
+    ///  does not exist.
+    @Published private(set) var renderIdentity: String = ""
     @Published private(set) var lastRenderMs: Double = 0
     @Published private(set) var sourceSize: CGSize = .zero
 
@@ -265,6 +280,9 @@ final class ViewModel: ObservableObject {
             let result = try engine.render(tier: "live", reprint: true)
             renderer.setTexture(result.texture)
             renderedTexture = result.texture
+            renderIdentity = result.progressID.isEmpty
+                ? UUID().uuidString
+                : result.progressID
             lastRenderMs = result.elapsedMs
             state = .ready
             statusText = String(format: "渲染完成 · %.0f ms · %d×%d",
@@ -375,7 +393,9 @@ final class ViewModel: ObservableObject {
         commandBuffer.waitUntilCompleted()
 
         // 2) Per-pixel RGBA16 uint16 data, now on the CPU (tightly packed).
-        let src = buffer.contents()!.assumingMemoryBound(to: UInt16.self)
+        //    `contents()` on a shared buffer is non-optional, so there is
+        //    nothing to unwrap.
+        let src = buffer.contents().assumingMemoryBound(to: UInt16.self)
 
         // 3) RGBA16Unorm → Float → linear ProPhoto → linear sRGB → sRGB 8-bit.
         //    The engine renders in the ProPhoto working space but applies the
@@ -434,11 +454,16 @@ final class ViewModel: ObservableObject {
 /// RAW 原始文件字节（ARW/CR3/DNG…）。优先按 `rawImage` 取原始数据；普通照片
 /// 回退到 `image`。`PhotosPickerItem.loadTransferable(type: Data.self)` 对于
 /// RAW 只能拿到渲染后的位图，拿不到原始字节，所以这里用自定义 Transferable。
+///
+/// The `importedContentType:` label is the one this SDK expects; the older
+/// `importedAs:` is not a parameter of `DataRepresentation` any more, and
+/// writing it is a compile error rather than a deprecation.
 struct PickedImageData: Transferable {
     let data: Data
+
     static var transferRepresentation: some TransferRepresentation {
-        DataRepresentation(importedAs: .rawImage) { Self(data: $0) }
-        DataRepresentation(importedAs: .image) { Self(data: $0) }
+        DataRepresentation(importedContentType: .rawImage) { Self(data: $0) }
+        DataRepresentation(importedContentType: .image) { Self(data: $0) }
     }
 }
 
