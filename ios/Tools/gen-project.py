@@ -220,8 +220,14 @@ def build() -> str:
         "CLANG_CXX_LANGUAGE_STANDARD": '"c++20"',
         "CLANG_CXX_LIBRARY": '"libc++"',
         "GCC_C_LANGUAGE_STANDARD": "c11",
+        # `$(SRCROOT)` is the directory holding the .xcodeproj, which is
+        # `ios/`. The engine is at the repository root, so the path up from
+        # there is one level, not two: `$(SRCROOT)/../engine/...`. Two
+        # levels points above the repository, and the bridging header's
+        # `#import "spektrafilm/spk_engine.h"` then fails with "file not
+        # found" -- which is what it did.
         "HEADER_SEARCH_PATHS": "(\n" + "".join(
-            f'\t\t\t\t\t"$(SRCROOT)/../../engine/{sub}",\n'
+            f'\t\t\t\t\t"$(SRCROOT)/../engine/{sub}",\n'
             for sub in ("include", "src", "src/core", "third_party/metal-cpp")
         ) + "\t\t\t\t)",
         "SWIFT_OBJC_BRIDGING_HEADER": f'"{APP}/Service/{APP}-Bridging-Header.h"',
