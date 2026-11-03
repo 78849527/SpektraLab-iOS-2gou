@@ -285,6 +285,12 @@ def build() -> str:
         "LD_RUNPATH_SEARCH_PATHS": '"$(inherited) @executable_path/Frameworks"',
         "SUPPORTS_MACCATALYST": "NO",
         "SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD": "NO",
+        # Without this actool compiles the catalog's colours but never its
+        # icons, and the bundle ships with no `CFBundleIcons` and no
+        # `CFBundleIconName`. iOS 27's installer refuses such a bundle, and
+        # the failure surfaces as "Failed to get bundle ID" from
+        # `IXPlaceholder` -- nowhere near the actual cause.
+        "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
     }
 
     def cfg(tag: str, name: str, settings: dict, extra: dict) -> str:
