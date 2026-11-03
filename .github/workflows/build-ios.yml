@@ -54,6 +54,16 @@ jobs:
       UPSTREAM_COMMIT: 02d82b56cf65f0f8e802a708612edc4e9a4790af
       UPSTREAM_REPO: https://github.com/JamesQiu2005/SpektraLab.git
       BUNDLE_ID_DEFAULT: com.hanze.spektralab
+      # Whether the signing material is there.
+      #
+      # These are *flags*, not the secrets themselves: GitHub's expression
+      # evaluator does not have `secrets` in a step's `if:/, so the question "is it set?" has to be asked of an
+      # environment variable rather than of the secret store.
+      HAVE_CERT: ${{ secrets.IOS_CERTIFICATE_P12 != '' }}
+      HAVE_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE != '' }}
+      HAVE_TEAM: ${{ secrets.IOS_TEAM_ID != '' }}
+      HAVE_IDENTITY: ${{ secrets.IOS_CERTIFICATE_IDENTITY != '' }}
+      HAVE_PROFILE_NAME: ${{ secrets.IOS_PROVISIONING_PROFILE_NAME != '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -133,7 +143,7 @@ jobs:
       # secret being there: a repository that has not set them up yet still
       # gets a build, and the warning at the end says what is missing.
       - name: Install the signing certificate
-        if: ${{ secrets.IOS_CERTIFICATE_P12 != '' }}
+        if: ${{ env.HAVE_CERT == 'true' }}
         env:
           CERT_B64: ${{ secrets.IOS_CERTIFICATE_P12 }}
           CERT_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
@@ -151,7 +161,7 @@ jobs:
           security find-identity -v -p codesigning
 
       - name: Install the provisioning profile
-        if: ${{ secrets.IOS_PROVISIONING_PROFILE != '' }}
+        if: ${{ env.HAVE_PROFILE == 'true' }}
         env:
           PROFILE_B64: ${{ secrets.IOS_PROVISIONING_PROFILE }}
         run: |
@@ -165,12 +175,6 @@ jobs:
             | plutil -extract Name raw - 2>/dev/null || echo "  (name not printed)"
 
       - name: Say what is missing, if anything
-        env:
-          HAVE_CERT: ${{ secrets.IOS_CERTIFICATE_P12 != '' }}
-          HAVE_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE != '' }}
-          HAVE_TEAM: ${{ secrets.IOS_TEAM_ID != '' }}
-          HAVE_IDENTITY: ${{ secrets.IOS_CERTIFICATE_IDENTITY != '' }}
-          HAVE_PROFILE_NAME: ${{ secrets.IOS_PROVISIONING_PROFILE_NAME != '' }}
         run: |
           echo "certificate:    ${HAVE_CERT}"
           echo "identity:       ${HAVE_IDENTITY}"
