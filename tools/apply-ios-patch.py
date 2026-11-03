@@ -19,12 +19,13 @@ The changes, and why each is needed:
    pressure half is conditional, and the queue stays unconditional because
    the timer needs it.
 
-2. `metal_gpu.cpp` -- `MTLTextureUsageCopySource` on the result texture.
-   The texture the engine hands back is created `ShaderRead` only. A caller
-   that wants the pixels -- which is exactly what the iOS export does when it
-   writes the photo to the library -- cannot blit out of a texture that was
-   not created with `CopySource`. The macOS app never noticed, because it
-   reads the texture by drawing it, not by copying it.
+2. `metal_gpu.cpp` -- the result texture keeps its upstream `ShaderRead`
+   usage. There is no `MTL::TextureUsageCopySource` in metal-cpp: Metal has
+   no such usage bit, and blit-copying from a texture requires no usage
+   declaration on the source. An earlier version of this patch added that
+   flag and failed the iOS build with "no member named
+   'TextureUsageCopySource'". The export blits into a shared buffer, which
+   needs none of this.
 
 3. `metal_gpu.cpp` -- `GPUFamilyMac2` under `TARGET_OS_OSX`.
    `supportsFamily(Mac2)` returns false on iOS, so the expression is
@@ -178,6 +179,11 @@ change(
         if (!test_pressure_flags_ || !pressure_queue_) return;
         dispatch_sync_f(pressure_queue_, this, &MetalGpu::test_pressure_event);
     }
+#else
+    // The two frame-boundary call sites are unconditional, so iOS needs
+    // a definition too. There is no pressure source (and no test hook)
+    // on iOS, so it is a no-op rather than an unresolved symbol.
+    void fire_test_pressure_if_asked() {}
 #endif""",
 )
 
@@ -211,18 +217,6 @@ change(
 #else
         s.pressure_monitor = false;
 #endif""",
-)
-
-# --- 2. the result texture must be copyable ---------------------------------
-
-change(
-    "result texture usage",
-    """        desc->setUsage(MTL::TextureUsageShaderRead);""",
-    """        // `CopySource` as well as `ShaderRead`: a caller that wants the
-        // pixels -- the iOS export writes the photo to the library -- blits
-        // the texture into a shared buffer, and Metal refuses to copy out of
-        // a texture that was not created with `CopySource`.
-        desc->setUsage(MTL::TextureUsageShaderRead | MTL::TextureUsageCopySource);""",
 )
 
 # --- 3. the GPU family probe ------------------------------------------------
