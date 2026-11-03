@@ -418,8 +418,11 @@ jobs:
           # re-sign the bundle and its `_CodeSignature` disagree and the
           # install dies at IXPlaceholder with "Failed to get bundle ID".
           # The unsealed IPA is what a re-signer wants: nothing to inherit.
-          (cd build && ditto -c -k --keepParent --norsrc --noextattr --noqtn \
-             Payload ipa/SpektraLab-unsigned.ipa)
+          # `zip`, not `ditto -c -k`: ditto streams and therefore sets the
+          # data-descriptor flag on every file entry, which some extractors --
+          # including ones on iOS -- mishandle. What goes missing first is
+          # `Info.plist`, and the installer then reports "Missing bundle ID".
+          (cd build && zip -qry ipa/SpektraLab-unsigned.ipa Payload)
 
           # A bundle with no `_CodeSignature` is an incomplete app bundle: a
           # re-signer reads the identifier out of the existing signature to know
@@ -488,14 +491,26 @@ jobs:
           # `ditto -c -k` turns each one into an AppleDouble `._*` entry in
           # the zip. On the device those unpack as real files beside the
           # originals, and the seal then does not match what is there.
-          (cd build && ditto -c -k --keepParent --norsrc --noextattr --noqtn \
-             Payload ipa/SpektraLab.ipa)
+          (cd build && zip -qry ipa/SpektraLab.ipa Payload)
           ls -la build/ipa
 
           # Check the archive itself rather than the staging directory: the
           # thing a signing service chokes on is what is inside the zip, and a
           # `Payload/` path that is one level off looks fine right up until it
           # does not install.
+          # Guard against a regression to a streaming zipper: a data
+          # descriptor on any entry is what broke the iOS install.
+          python3 - build/ipa/SpektraLab-unsigned.ipa build/ipa/SpektraLab.ipa <<'PY'
+          import sys, zipfile
+          for path in sys.argv[1:]:
+              z = zipfile.ZipFile(path)
+              bad = [i.filename for i in z.infolist() if i.flag_bits & 0x08]
+              if bad:
+                  print(f"::error file={path}::{len(bad)} entries carry a data "
+                        f"descriptor, e.g. {bad[0]}")
+                  sys.exit(1)
+              print(f"{path}: {len(z.infolist())} entries, none with a data descriptor")
+          PY
           unzip -l build/ipa/SpektraLab.ipa | sed -n '1,5p'
           unzip -p build/ipa/SpektraLab.ipa Payload/SpektraLab.app/Info.plist > build/shipped.plist
           echo "shipped Info.plist starts with: $(head -c 38 build/shipped.plist)"
