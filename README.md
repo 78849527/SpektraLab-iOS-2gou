@@ -23,10 +23,18 @@
 | 改动 | 为什么 |
 |---|---|
 | 内存压力监控包在 `#if TARGET_OS_OSX` 里 | `DISPATCH_SOURCE_TYPE_MEMORYPRESSURE` 在 iOS SDK 里不存在，不改就编译不过。共用同一个队列的 idle timer 不受影响，它在 iOS 上照常工作。 |
-| 结果纹理加 `MTLTextureUsageCopySource` | 引擎原本只声明 `ShaderRead`。iOS 的导出要把像素写进相册，需要 blit 回读，而 Metal 不允许从没有 `CopySource` 的纹理里复制。macOS 版没暴露这个问题，因为它是把纹理**画**出来而不是**读**出来。 |
+| 结果纹理 usage flag | 曾尝试加 `MTLTextureUsageCopySource`，但 `metal-cpp` 里没定义这个枚举（metal-cpp 不完备），实际 blit 回读也不需要它 —— 保留上游的 `ShaderRead`。 |
 | `GPUFamilyMac2` 包在 `#if TARGET_OS_OSX` 里 | iOS 没有这个 family。 |
 
 补丁脚本每处改动都先断言命中次数，全部命中才写盘，并且检查 `#if`/`#endif` 是否平衡——一个悄悄没打上的补丁，会在很远的地方以「引擎 bug」的样子炸掉。
+
+## 下载
+
+最新 IPA 每次构建都会更新：
+
+**[下载 SpektraLab.ipa](https://github.com/Minerchu/SpektraLab-iOS/releases/latest/download/SpektraLab.ipa)**
+
+未配签名 secret 时这个 IPA 需要你自己重签才能装到手机——见下面「装到手机上」一节。
 
 ## 目录
 
@@ -57,12 +65,12 @@ GitHub Actions 会在 macOS runner 上拉引擎、打补丁、编译内核、构
 
 然后点 **Actions → Build IPA → Run workflow**。IPA 会出现在该次运行的 **Artifacts → SpektraLab-IPA** 里。
 
-没配 secret 也能跑，但产物是 ad-hoc 签名的，**装不上手机**——工作流会在日志里明确警告这一点，而不是给一个看起来完成实则不能用的东西。
+没配 secret 也能跑，但产物需要自己重签才能装手机——工作流会在日志里明确警告。成功构建后 IPA 会自动发布到 [latest release](https://github.com/Minerchu/SpektraLab-iOS/releases/latest)。
 
 ### 本地（有 Mac）
 
 ```bash
-git clone https://github.com/SAINTTaiYi/SpektraLab-iOS.git
+git clone https://github.com/Minerchu/SpektraLab-iOS.git
 cd SpektraLab-iOS
 
 # 1) 上游引擎
