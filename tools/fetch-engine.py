@@ -101,7 +101,9 @@ def request(url: str, token: str, raw: bool = False, tries: int = 5):
                 print(f"  rate limited; waiting {wait}s", flush=True)
                 time.sleep(wait)
                 continue
-            if error.code in (502, 503, 504) and attempt < tries - 1:
+            # 500 included on purpose: the API answers it transiently, and
+            # one of them on one blob used to abort the whole fetch.
+            if error.code in (500, 502, 503, 504) and attempt < tries - 1:
                 time.sleep(2 + attempt * 3)
                 continue
             raise
