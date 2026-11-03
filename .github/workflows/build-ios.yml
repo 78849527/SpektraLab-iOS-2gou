@@ -255,7 +255,7 @@ jobs:
             -derivedDataPath build/DerivedData \
             -destination "generic/platform=iOS" \
             -archivePath build/SpektraLab.xcarchive \
-            archive 2>&1 | tee build/xcodebuild.log
+            archive CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/xcodebuild.log
           rc=${PIPESTATUS[0]}
           set -e
           if [ "$rc" -ne 0 ]; then
@@ -264,6 +264,14 @@ jobs:
               -exec python3 -c "import plistlib,sys; print(plistlib.load(open(sys.argv[1],'rb')).get('CFBundleIdentifier'))" {} \;
             echo "=== source Info.plist ==="
             python3 -c "import plistlib; print(plistlib.load(open('ios/SpektraLab/Info.plist','rb')).get('CFBundleIdentifier'))"
+            echo "=== .xcarchive/Info.plist ==="
+            python3 -c "import plistlib; print(plistlib.load(open('build/SpektraLab.xcarchive/Info.plist','rb')))" 2>&1 || true
+            echo "=== codesign state of the archived app ==="
+            codesign -dv build/SpektraLab.xcarchive/Products/Applications/SpektraLab.app 2>&1 || true
+            echo "=== resolved PRODUCT_BUNDLE_IDENTIFIER ==="
+            xcodebuild -project ios/SpektraLab.xcodeproj -scheme SpektraLab \
+              -configuration Release -showBuildSettings 2>/dev/null \
+              | grep -m1 PRODUCT_BUNDLE_IDENTIFIER || true
             exit $rc
           fi
           echo "the archive is at build/SpektraLab.xcarchive"
