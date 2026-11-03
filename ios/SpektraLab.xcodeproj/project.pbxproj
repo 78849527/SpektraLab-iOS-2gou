@@ -298,10 +298,10 @@
 				GCC_OPTIMIZATION_LEVEL = 2;
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
-					"$(SRCROOT)/../../engine/include",
-					"$(SRCROOT)/../../engine/src",
-					"$(SRCROOT)/../../engine/src/core",
-					"$(SRCROOT)/../../engine/third_party/metal-cpp",
+					"$(SRCROOT)/../engine/include",
+					"$(SRCROOT)/../engine/src",
+					"$(SRCROOT)/../engine/src/core",
+					"$(SRCROOT)/../engine/third_party/metal-cpp",
 				);
 				INFOPLIST_FILE = SpektraLab/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
@@ -345,10 +345,10 @@
 				GCC_C_LANGUAGE_STANDARD = c11;
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = (
-					"$(SRCROOT)/../../engine/include",
-					"$(SRCROOT)/../../engine/src",
-					"$(SRCROOT)/../../engine/src/core",
-					"$(SRCROOT)/../../engine/third_party/metal-cpp",
+					"$(SRCROOT)/../engine/include",
+					"$(SRCROOT)/../engine/src",
+					"$(SRCROOT)/../engine/src/core",
+					"$(SRCROOT)/../engine/third_party/metal-cpp",
 				);
 				INFOPLIST_FILE = SpektraLab/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
