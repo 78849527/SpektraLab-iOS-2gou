@@ -31,7 +31,7 @@ struct Stock: Identifiable, Hashable, Sendable {
     /// `film` or `paper`.
     let support: Support
     /// `negative` or `positive`. A slide has no negative to print from.
-    let type: Type
+    let type: FilmType
 
     enum Support: String, Sendable {
         case film, paper
@@ -43,7 +43,7 @@ struct Stock: Identifiable, Hashable, Sendable {
         }
     }
 
-    enum Type: String, Sendable {
+    enum FilmType: String, Sendable {
         case negative, positive
         var label: String {
             switch self {
@@ -86,7 +86,7 @@ struct StockCatalog: Sendable {
                   let supportRaw = info["support"] as? String,
                   let typeRaw = info["type"] as? String,
                   let support = Stock.Support(rawValue: supportRaw),
-                  let type = Stock.Type(rawValue: typeRaw) else {
+                  let type = Stock.FilmType(rawValue: typeRaw) else {
                 continue
             }
             let name = (info["name"] as? String) ?? id
