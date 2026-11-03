@@ -246,37 +246,48 @@ jobs:
         run: |
           set -euo pipefail
           python3 ios/Tools/gen-project.py
-          mkdir -p build
-          set -o pipefail
-          set +e
-          xcodebuild -project ios/SpektraLab.xcodeproj \
-            -scheme SpektraLab \
-            -configuration Release \
-            -derivedDataPath build/DerivedData \
-            -destination "generic/platform=iOS" \
-            -archivePath build/SpektraLab.xcarchive \
-            archive CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/xcodebuild.log
-          rc=${PIPESTATUS[0]}
-          set -e
-          if [ "$rc" -ne 0 ]; then
-            echo "=== diagnostic: CFBundleIdentifier in the built app ==="
-            find build -path '*SpektraLab.app/Info.plist' -print \
-              -exec python3 -c "import plistlib,sys; print(plistlib.load(open(sys.argv[1],'rb')).get('CFBundleIdentifier'))" {} \;
-            echo "=== source Info.plist ==="
-            python3 -c "import plistlib; print(plistlib.load(open('ios/SpektraLab/Info.plist','rb')).get('CFBundleIdentifier'))"
-            echo "=== .xcarchive/Info.plist ==="
-            python3 -c "import plistlib; print(plistlib.load(open('build/SpektraLab.xcarchive/Info.plist','rb')))" 2>&1 || true
-            echo "=== codesign state of the archived app ==="
-            codesign -dv build/SpektraLab.xcarchive/Products/Applications/SpektraLab.app 2>&1 || true
-            echo "=== resolved PRODUCT_BUNDLE_IDENTIFIER ==="
-            xcodebuild -project ios/SpektraLab.xcodeproj -scheme SpektraLab \
-              -configuration Release -showBuildSettings 2>/dev/null \
-              | grep -m1 PRODUCT_BUNDLE_IDENTIFIER || true
-            exit $rc
-          fi
-          echo "the archive is at build/SpektraLab.xcarchive"
+          mkdir -p build build/ipa
 
-      - name: Export the IPA
+          # Archive only with real signing material. `xcodebuild archive`
+          # writes the .xcarchive's own Info.plist by reading the bundle id
+          # and the team out of the app's code signature; without a
+          # certificate and a profile there is no signature to read, and it
+          # fails with "Archive Missing Bundle Identifier" even though the
+          # app's Info.plist is correct. Without signing material, build the
+          # .app directly and package it by hand in the next step.
+          SIGNED=false
+          if [ "$HAVE_CERT" = "true" ] && [ "$HAVE_PROFILE" = "true" ] \
+             && [ "$HAVE_TEAM" = "true" ] && [ "$HAVE_PROFILE_NAME" = "true" ]; then
+            SIGNED=true
+          fi
+
+          if [ "$SIGNED" = true ]; then
+            echo "BUILD_MODE=archive" >> "$GITHUB_ENV"
+            set -o pipefail
+            xcodebuild -project ios/SpektraLab.xcodeproj \
+              -scheme SpektraLab \
+              -configuration Release \
+              -derivedDataPath build/DerivedData \
+              -destination "generic/platform=iOS" \
+              -archivePath build/SpektraLab.xcarchive \
+              archive 2>&1 | tee build/xcodebuild.log
+            echo "the archive is at build/SpektraLab.xcarchive"
+          else
+            echo "BUILD_MODE=package" >> "$GITHUB_ENV"
+            # No signing material: hand Xcode the compile, and do the
+            # signing and the packaging ourselves. CODE_SIGNING_ALLOWED=NO
+            # keeps it from trying to find a profile it does not have.
+            set -o pipefail
+            xcodebuild -project ios/SpektraLab.xcodeproj \
+              -scheme SpektraLab \
+              -configuration Release \
+              -derivedDataPath build/DerivedData \
+              -destination "generic/platform=iOS" \
+              build CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/xcodebuild.log
+            echo "built the unsigned .app; it is signed ad-hoc when it is packaged"
+          fi
+
+      - name: Package the IPA
         env:
           IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
           IOS_BUNDLE_ID: ${{ secrets.IOS_BUNDLE_ID }}
@@ -284,9 +295,9 @@ jobs:
           BUNDLE_ID_DEFAULT: com.hanze.spektralab
         run: |
           set -euo pipefail
-          mkdir -p build/ipa
           bundle="${IOS_BUNDLE_ID:-$BUNDLE_ID_DEFAULT}"
-          if [ -n "${IOS_PROFILE_NAME:-}" ] && [ -n "${IOS_TEAM_ID:-}" ]; then
+
+          if [ "$BUILD_MODE" = "archive" ]; then
             cat > build/ExportOptions.plist <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -306,27 +317,47 @@ jobs:
           </dict>
           </plist>
           PLIST
-          else
-            # No profile: an ad-hoc signature. The IPA is produced, and it
-            # will not install on a device -- the warning above says so.
-            cat > build/ExportOptions.plist <<PLIST
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key>
-            <string>ad-hoc</string>
-          </dict>
-          </plist>
-          PLIST
+            set -o pipefail
+            xcodebuild -exportArchive \
+              -archivePath build/SpektraLab.xcarchive \
+              -exportOptionsPlist build/ExportOptions.plist \
+              -exportPath build/ipa \
+              2>&1 | tee build/export.log
+            ls -la build/ipa
+            exit 0
           fi
-          set -o pipefail
-          xcodebuild -exportArchive \
-            -archivePath build/SpektraLab.xcarchive \
-            -exportOptionsPlist build/ExportOptions.plist \
-            -exportPath build/ipa \
-            2>&1 | tee build/export.log
+
+          # The unsigned path: take the built .app, check it is a real bundle,
+          # ad-hoc sign it and zip it into Payload/. ditto (not zip) because
+          # it keeps the bundle's metadata and symlinks the way iOS expects.
+          app=$(find build/DerivedData/Build/Products/Release-iphoneos \
+                  -maxdepth 1 -name 'SpektraLab.app' -print -quit)
+          if [ -z "$app" ]; then
+            echo "::error::no Release-iphoneos/SpektraLab.app was built"
+            ls -la build/DerivedData/Build/Products || true
+            exit 1
+          fi
+          echo "packaging $app"
+          python3 - "$app/Info.plist" <<'PY'
+          import plistlib, sys
+          d = plistlib.load(open(sys.argv[1], "rb"))
+          for k in ("CFBundleIdentifier", "CFBundleExecutable",
+                    "CFBundleVersion", "CFBundleShortVersionString"):
+              print(f"  {k} = {d.get(k)!r}")
+          PY
+
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          cp -R "$app" build/Payload/SpektraLab.app
+
+          # Ad-hoc: no identity, no profile. Enough to make the bundle a
+          # well-formed signed package; not enough to install on a device.
+          codesign --force --sign - --timestamp=none build/Payload/SpektraLab.app
+          codesign -dv build/Payload/SpektraLab.app 2>&1 || true
+
+          (cd build && ditto -c -k --keepParent Payload ipa/SpektraLab-unsigned.ipa)
           ls -la build/ipa
+          echo "::notice::SpektraLab-unsigned.ipa is ad-hoc signed: install it by re-signing with your own Apple ID (AltStore/Xcode), or set the seven signing secrets to get a device-installable IPA."
 
       - name: Upload the IPA
         if: always()
