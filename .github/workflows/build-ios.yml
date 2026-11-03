@@ -50,6 +50,13 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 45
 
+    # The rolling release at the end of the job is written with the workflow's
+    # own token, and `contents: write` is what lets it create one; a
+    # repository whose default is read-only would otherwise fail with a 403
+    # on a step that has nothing to do with the build.
+    permissions:
+      contents: write
+
     # Job-level environment: the bundle id and the upstream commit are
     # configuration, not secrets, and every step reads them from here.
     #
@@ -70,15 +77,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The engine is upstream's, and it is not in this repository: this one
-      # carries the app, the patch and the build scripts, and the engine comes
-      # from the upstream project at a pinned commit.
-      #
-      # A tarball rather than a git fetch. `git fetch --depth 1 origin <sha>`
-      # does not reliably give the tree of that commit: GitHub serves a SHA
-      # only when it is reachable from a ref, and a shallow fetch of an
-      # arbitrary SHA comes back without the tree. The tarball is the same
-      # bytes with none of that.
       # The engine is upstream's, and it is not in this repository: this one
       # carries the app, the patch and the build scripts, and the engine comes
       # from the upstream project at a pinned commit.
@@ -298,31 +296,33 @@ jobs:
           bundle="${IOS_BUNDLE_ID:-$BUNDLE_ID_DEFAULT}"
 
           if [ "$BUILD_MODE" = "archive" ]; then
-            cat > build/ExportOptions.plist <<PLIST
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key>
-            <string>development</string>
-            <key>teamID</key>
-            <string>${IOS_TEAM_ID}</string>
-            <key>signingStyle</key>
-            <string>manual</string>
-            <key>provisioningProfiles</key>
-            <dict>
-              <key>${bundle}</key>
-              <string>${IOS_PROFILE_NAME}</string>
-            </dict>
-          </dict>
-          </plist>
-          PLIST
+            # Written by plistlib rather than by a heredoc: the heredoc would
+            # inherit this block's indentation, and an XML declaration that is
+            # not at the first byte of the file is not an XML declaration.
+            python3 - <<'PY'
+          import os, plistlib
+          bundle = os.environ.get("IOS_BUNDLE_ID") or os.environ["BUNDLE_ID_DEFAULT"]
+          options = {
+              "method": "development",
+              "teamID": os.environ["IOS_TEAM_ID"],
+              "signingStyle": "manual",
+              "provisioningProfiles": {bundle: os.environ["IOS_PROFILE_NAME"]},
+          }
+          with open("build/ExportOptions.plist", "wb") as handle:
+              plistlib.dump(options, handle)
+          PY
             set -o pipefail
             xcodebuild -exportArchive \
               -archivePath build/SpektraLab.xcarchive \
               -exportOptionsPlist build/ExportOptions.plist \
               -exportPath build/ipa \
               2>&1 | tee build/export.log
+            # One name for both paths, so the release asset and the link in
+            # the README do not change with the signing path.
+            ipa=$(find build/ipa -maxdepth 1 -name '*.ipa' -print -quit)
+            if [ "$ipa" != "build/ipa/SpektraLab.ipa" ]; then
+              mv "$ipa" build/ipa/SpektraLab.ipa
+            fi
             ls -la build/ipa
             exit 0
           fi
@@ -371,9 +371,9 @@ jobs:
             echo "::warning::ad-hoc codesign failed; the IPA ships with no signature at all"
           fi
 
-          (cd build && ditto -c -k --keepParent Payload ipa/SpektraLab-unsigned.ipa)
+          (cd build && ditto -c -k --keepParent Payload ipa/SpektraLab.ipa)
           ls -la build/ipa
-          echo "::notice::SpektraLab-unsigned.ipa is not device-installable: re-sign it with your own Apple ID (AltStore/Sideloadly/Xcode), or set the seven signing secrets to get a signed export."
+          echo "::notice::build/ipa/SpektraLab.ipa is not device-installable as it stands: re-sign it with your own Apple ID (AltStore/Sideloadly/Xcode), or set the seven signing secrets to get a signed export."
 
       - name: Upload the IPA
         if: always()
@@ -383,6 +383,37 @@ jobs:
           path: build/ipa/*.ipa
           if-no-files-found: warn
           retention-days: 30
+
+      # A rolling release, so the link in the README always resolves. Run
+      # artifacts are pruned after `retention-days`, and a download link that
+      # 404s a month later is worse than no link at all.
+      #
+      # Each build replaces the previous one: `gh release create` cannot move
+      # an existing tag, so the release goes first and takes its tag with it.
+      # Only on `main`, and only when everything above succeeded -- a failed
+      # build must not be published as the latest good one.
+      - name: Publish the IPA
+        if: success() && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes=$(mktemp)
+          {
+            echo "由提交 \`${GITHUB_SHA}\` 构建（run ${GITHUB_RUN_NUMBER}）。"
+            echo ""
+            echo "安装办法见 README 的「装到手机上」一节：未配签名 secret 时"
+            echo "这个 IPA 需要你自己用 AltStore / Sideloadly / Xcode 重签。"
+          } > "$notes"
+
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create latest \
+            --target "$GITHUB_SHA" \
+            --title "SpektraLab 最新构建" \
+            --notes-file "$notes" \
+            build/ipa/*.ipa
+          gh release view latest --json url,assets \
+            --jq '.url, (.assets[] | "\(.name)  \(.size) bytes")'
 
       - name: Upload the build log
         if: failure()
