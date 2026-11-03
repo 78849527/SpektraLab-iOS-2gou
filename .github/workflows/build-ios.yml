@@ -501,12 +501,21 @@ jobs:
             echo "这个 IPA 需要你自己用 AltStore / Sideloadly / Xcode 重签。"
           } > "$notes"
 
+          # 文件名带提交号，而不是固定名：`releases/download/<tag>/<name>`
+          # 走 CDN，同名替换后一段时间内仍会返回旧文件。那正是「CI 已经修好、
+          # 装到手机上还是旧包」的成因——旧包的 Payload 目录名与 Info.plist
+          # 都不对，安装器于是报 Missing bundle ID。
+          asset="SpektraLab-${GITHUB_SHA::7}.ipa"
+          mkdir -p build/release
+          cp build/ipa/*.ipa "build/release/$asset"
+          echo "publishing $asset"
+
           gh release delete latest --yes --cleanup-tag 2>/dev/null || true
           gh release create latest \
             --target "$GITHUB_SHA" \
-            --title "SpektraLab 最新构建" \
+            --title "SpektraLab 最新构建（${GITHUB_SHA::7}）" \
             --notes-file "$notes" \
-            build/ipa/*.ipa
+            "build/release/$asset"
           gh release view latest --json url,assets \
             --jq '.url, (.assets[] | "\(.name)  \(.size) bytes")'
 
