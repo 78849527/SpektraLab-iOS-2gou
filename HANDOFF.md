@@ -5,6 +5,32 @@
 
 ## 一句话现状
 
+**编译 100% 通过，且 CI 已不再依赖 `xcodebuild archive`。**
+
+根因（已确认并绕开）：archive 在写 `.xcarchive/Info.plist` 时是**从代码签名里**读取
+bundle id / Team 的。CI runner 上没有证书与描述文件，归档出来的 .app
+`code object is not signed at all`，这个读取为空，xcodebuild 就报出误导性的
+`Archive Missing Bundle Identifier`。这解释了为什么改 Info.plist（值本来就对）、
+改 `CODE_SIGN_STYLE`、去 `VALIDATE_PRODUCT`、加 `CODE_SIGNING_ALLOWED=NO` **全都无效**
+—— 病根从来不在这些地方。
+
+**现在的 CI 结构**（`.github/workflows/build-ios.yml`，共 15 步）：
+
+- `Build`：签名 secret 齐全 → 走 `archive`；否则 → 直接
+  `xcodebuild ... build CODE_SIGNING_ALLOWED=NO`，产出
+  `Release-iphoneos/SpektraLab.app`，并把 `BUILD_MODE=archive|package` 写进
+  `$GITHUB_ENV`。
+- `Package the IPA`：archive 模式走 `-exportArchive`（正规签名 IPA）；package
+  模式把 .app 拷进 `Payload/`，自己 `codesign --force --sign -` ad-hoc 签名，再用
+  `ditto -c -k --keepParent` 打成 `build/ipa/SpektraLab-unsigned.ipa`（用 `ditto`
+  不用 `zip`：iOS 需要它保留的 bundle 元数据与符号链接）。
+
+所以**无 secret 也能出 IPA 工件**，但它是 ad-hoc 签名、装不上真机 ——
+要么用 AltStore/Xcode 以自己的 Apple ID 重签，要么配齐下面那 7 个 secret 走正规签名路径。
+
+## 以下保留原始踩坑记录（仍是有效背景，勿重复尝试）
+
+
 **编译已经 100% 通过**（Swift + 引擎 C++ + metallib 内核 + 资源烘焙 + App icon + 工程生成），
 CI 目前卡在 `Build` 步骤的 **archive 收尾阶段**：
 
