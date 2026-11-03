@@ -50,11 +50,7 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("SpektraLab")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(.visible, for: .navigationBar)
-            .toolbarBackground(Color.black, for: .navigationBar)
-            .toolbarColorScheme(.dark, for: .navigationBar)
-        }
+            .navigationBarTitleDisplayMode(.inline)        }
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showingFilms) {
             StockPicker(title: "选择胶片", stocks: model.catalog.films + model.catalog.slides,
@@ -88,7 +84,10 @@ struct ContentView: View {
         ZStack {
             if model.renderedTexture != nil {
                 MetalCanvas(renderer: model.renderer, texture: model.renderedTexture)
-                    .id(model.renderedTexture?.hashValue ?? 0)
+                    // The identity is the engine's progress id, not the
+                    // texture: `MTLTexture` is not `Hashable`, so it has no
+                    // `hashValue` to key the view on.
+                    .id(model.renderIdentity)
             } else {
                 emptyState
             }
