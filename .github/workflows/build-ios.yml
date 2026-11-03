@@ -557,7 +557,7 @@ jobs:
           gh release delete latest --yes --cleanup-tag 2>/dev/null || true
           gh release create latest \
             --target "$GITHUB_SHA" \
-            --title "SpektraLab 最新构建（$tag）" \
+            --title "SpektraLab 最新构建（${tag}）" \
             --notes-file "$notes" \
             "build/release/SpektraLab-$tag.ipa" \
             "build/release/SpektraLab-$tag-unsigned.ipa"
