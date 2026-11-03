@@ -72,14 +72,19 @@ struct ContentView: View {
         }
         .alert("导出", isPresented: $showingExport) {
             Button("保存到相册") {
-                Task { await model.exportToPhotos() }
+                _ = Task { await model.exportToPhotos() }
             }
             Button("取消", role: .cancel) {}
         } message: {
             Text("将以原始分辨率重新渲染并保存到相册。")
         }
+        // `_ = Task { ... }` rather than `Task { ... }`: `onChange`'s closure
+        // returns `Void`, and a bare `Task { ... }` expression leaves the
+        // compiler choosing between the standard library's `Task(priority:
+        // operation:)` and SwiftUI's own, which is "ambiguous use of
+        // 'init(priority:operation:)".
         .onChange(of: pickerItem) { _, newValue in
-            Task { await model.importPicked(newValue) }
+            _ = Task { await model.importPicked(newValue) }
         }
     }
 
