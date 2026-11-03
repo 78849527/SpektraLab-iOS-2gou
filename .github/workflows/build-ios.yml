@@ -412,6 +412,15 @@ jobs:
           plutil -convert xml1 "$app_dir/Info.plist"
           echo "Info.plist starts with: $(head -c 38 "$app_dir/Info.plist")"
 
+          # Ship an unsealed copy as well. SideStore/AltStore re-sign with
+          # `ldid`, which rewrites only the main executable; an ad-hoc seal
+          # made here also covered the metallibs and `Assets.car`, so after a
+          # re-sign the bundle and its `_CodeSignature` disagree and the
+          # install dies at IXPlaceholder with "Failed to get bundle ID".
+          # The unsealed IPA is what a re-signer wants: nothing to inherit.
+          (cd build && ditto -c -k --keepParent --norsrc --noextattr --noqtn \
+             Payload ipa/SpektraLab-unsigned.ipa)
+
           # A bundle with no `_CodeSignature` is an incomplete app bundle: a
           # re-signer reads the identifier out of the existing signature to know
           # what it is replacing, and an installer handed a bare directory
@@ -531,25 +540,27 @@ jobs:
           {
             echo "由提交 \`${GITHUB_SHA}\` 构建（run ${GITHUB_RUN_NUMBER}）。"
             echo ""
-            echo "安装办法见 README 的「装到手机上」一节：未配签名 secret 时"
-            echo "这个 IPA 需要你自己用 AltStore / Sideloadly / Xcode 重签。"
+            echo "- \`SpektraLab-<提交号>.ipa\`：ad-hoc 封签版，给 Sideloadly / Xcode 用。"
+            echo "- \`SpektraLab-<提交号>-unsigned.ipa\`：**未签名版，给 SideStore / AltStore 用**。"
+            echo "  它们用 ldid 自己重签，未封签的 bundle 不会和重签结果冲突。"
           } > "$notes"
 
           # 文件名带提交号，而不是固定名：`releases/download/<tag>/<name>`
           # 走 CDN，同名替换后一段时间内仍会返回旧文件。那正是「CI 已经修好、
-          # 装到手机上还是旧包」的成因——旧包的 Payload 目录名与 Info.plist
-          # 都不对，安装器于是报 Missing bundle ID。
-          asset="SpektraLab-${GITHUB_SHA::7}.ipa"
+          # 装到手机上还是旧包」的成因。
+          tag="${GITHUB_SHA::7}"
           mkdir -p build/release
-          cp build/ipa/*.ipa "build/release/$asset"
-          echo "publishing $asset"
+          cp build/ipa/SpektraLab.ipa          "build/release/SpektraLab-$tag.ipa"
+          cp build/ipa/SpektraLab-unsigned.ipa "build/release/SpektraLab-$tag-unsigned.ipa"
+          echo "publishing SpektraLab-$tag.ipa and SpektraLab-$tag-unsigned.ipa"
 
           gh release delete latest --yes --cleanup-tag 2>/dev/null || true
           gh release create latest \
             --target "$GITHUB_SHA" \
-            --title "SpektraLab 最新构建（${GITHUB_SHA::7}）" \
+            --title "SpektraLab 最新构建（$tag）" \
             --notes-file "$notes" \
-            "build/release/$asset"
+            "build/release/SpektraLab-$tag.ipa" \
+            "build/release/SpektraLab-$tag-unsigned.ipa"
           gh release view latest --json url,assets \
             --jq '.url, (.assets[] | "\(.name)  \(.size) bytes")'
 
