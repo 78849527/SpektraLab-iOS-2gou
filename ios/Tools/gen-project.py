@@ -248,7 +248,14 @@ def build() -> str:
         "IPHONEOS_DEPLOYMENT_TARGET": IOS_MIN,
         "SDKROOT": "iphoneos",
         "TARGETED_DEVICE_FAMILY": '"1,2"',
-        "CODE_SIGN_STYLE": "Manual" if TEAM_ID else "Automatic",
+        # Manual for both cases. Automatic signing needs a DEVELOPMENT_TEAM
+        # and an Apple account to choose a certificate; a CI runner with no
+        # signing secrets has neither, and `xcodebuild archive` then fails
+        # validation with "Archive Missing Bundle Identifier". Manual with
+        # CODE_SIGN_IDENTITY "-" is ad-hoc -- no team, no certificate -- and
+        # with real secrets PROVISIONING_PROFILE_SPECIFIER + the named
+        # identity drive it instead.
+        "CODE_SIGN_STYLE": "Manual",
         "CODE_SIGN_IDENTITY": f'"{SIGN_IDENTITY}"',
         "DEVELOPMENT_TEAM": f'"{TEAM_ID}"',
         "CLANG_ENABLE_MODULES": "YES",
