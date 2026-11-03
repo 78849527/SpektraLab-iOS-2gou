@@ -244,289 +244,95 @@ jobs:
       # -exportArchive", and `-derivedDataPath` wants one too. The scheme is
       # written by `ios/Tools/gen-project.py` next to the project, because a
       # generated project has no scheme unless something writes one.
-      - name: Build
-        env:
-          SPEKTRAFILM_SIGN_IDENTITY: ${{ secrets.IOS_CERTIFICATE_IDENTITY }}
-          SPEKTRAFILM_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
-          SPEKTRAFILM_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}
-          SPEKTRAFILM_BUNDLE_ID: ${{ secrets.IOS_BUNDLE_ID }}
+      # One step, Xcode's own archive -> export chain. The IPA's permissions,
+      # zip structure, Info.plist merging and icons are all Xcode's job here;
+      # hand-packing them is exactly what lost the icon and produced a zip
+      # with data descriptors.
+      - name: Build and export the IPA
         run: |
           set -euo pipefail
           python3 ios/Tools/gen-project.py
           mkdir -p build build/ipa
+          set -o pipefail
 
-          # Archive only with real signing material. `xcodebuild archive`
-          # writes the .xcarchive's own Info.plist by reading the bundle id
-          # and the team out of the app's code signature; without a
-          # certificate and a profile there is no signature to read, and it
-          # fails with "Archive Missing Bundle Identifier" even though the
-          # app's Info.plist is correct. Without signing material, build the
-          # .app directly and package it by hand in the next step.
-          SIGNED=false
-          if [ "$HAVE_CERT" = "true" ] && [ "$HAVE_PROFILE" = "true" ] \
-             && [ "$HAVE_TEAM" = "true" ] && [ "$HAVE_PROFILE_NAME" = "true" ]; then
-            SIGNED=true
-          fi
+          echo "==> archive (ad-hoc; no certificate needed)"
+          xcodebuild -project ios/SpektraLab.xcodeproj \
+            -scheme SpektraLab \
+            -configuration Release \
+            -derivedDataPath build/DerivedData \
+            -destination "generic/platform=iOS" \
+            -archivePath build/SpektraLab.xcarchive \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=YES \
+            archive 2>&1 | tee build/archive.log
 
-          if [ "$SIGNED" = true ]; then
-            echo "BUILD_MODE=archive" >> "$GITHUB_ENV"
-            set -o pipefail
-            xcodebuild -project ios/SpektraLab.xcodeproj \
-              -scheme SpektraLab \
-              -configuration Release \
-              -derivedDataPath build/DerivedData \
-              -destination "generic/platform=iOS" \
-              -archivePath build/SpektraLab.xcarchive \
-              archive 2>&1 | tee build/xcodebuild.log
-            echo "the archive is at build/SpektraLab.xcarchive"
-          else
-            echo "BUILD_MODE=package" >> "$GITHUB_ENV"
-            # No signing material, but the bundle is still sealable: the
-            # generated project asks for `CODE_SIGN_IDENTITY "-"` with no
-            # profile, which is ad-hoc, and Xcode's CodeSign phase is the only
-            # thing that seals an iOS bundle carrying `Assets.car` and a
-            # root-level `default.metallib` -- a hand-run codesign refuses
-            # exactly that combination. Ask Xcode to do it.
-            #
-            # `AD_HOC_CODE_SIGNING_ALLOWED=YES` is the part that makes it
-            # happen: for an iOS device target Xcode 16 defaults that setting to
-            # NO, and with identity "-" and no team it then skips the CodeSign
-            # phase quietly -- the build succeeds, the .app ships with no
-            # `_CodeSignature` at all, and every tool downstream reports
-            # "Missing bundle ID" because the bundle id is read from a signature
-            # that is not there.
-            #
-            # If the seal still fails, rebuild unsigned rather than lose the
-            # run: the artifact matters more than the seal, and the packaging
-            # step reports which of the two the bundle got.
-            set -o pipefail
-            if xcodebuild -project ios/SpektraLab.xcodeproj \
-              -scheme SpektraLab \
-              -configuration Release \
-              -derivedDataPath build/DerivedData \
-              -destination "generic/platform=iOS" \
-              build AD_HOC_CODE_SIGNING_ALLOWED=YES 2>&1 | tee build/xcodebuild.log
-            then
-              echo "the build finished; the packaging step reports whether the bundle was sealed"
-            else
-              echo "::warning::Xcode could not build with the ad-hoc seal; rebuilding unsigned"
-              xcodebuild -project ios/SpektraLab.xcodeproj \
-                -scheme SpektraLab \
-                -configuration Release \
-                -derivedDataPath build/DerivedData \
-                -destination "generic/platform=iOS" \
-                build CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/xcodebuild-unsigned.log
-              echo "built the unsigned .app"
-            fi
-          fi
+          echo "==> export (ad-hoc)"
+          cat > build/ExportOptions.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>ad-hoc</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>destination</key>
+            <string>export</string>
+            <key>stripSwiftSymbols</key>
+            <true/>
+            <key>compileBitcode</key>
+            <false/>
+          </dict>
+          </plist>
+          PLIST
 
-      - name: Package the IPA
-        env:
-          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
-          IOS_BUNDLE_ID: ${{ secrets.IOS_BUNDLE_ID }}
-          IOS_PROFILE_NAME: ${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}
-          BUNDLE_ID_DEFAULT: com.hanze.spektralab
-        run: |
-          set -euo pipefail
-          bundle="${IOS_BUNDLE_ID:-$BUNDLE_ID_DEFAULT}"
-
-          if [ "$BUILD_MODE" = "archive" ]; then
-            # Written by plistlib rather than by a heredoc: the heredoc would
-            # inherit this block's indentation, and an XML declaration that is
-            # not at the first byte of the file is not an XML declaration.
-            python3 - <<'PY'
-          import os, plistlib
-          bundle = os.environ.get("IOS_BUNDLE_ID") or os.environ["BUNDLE_ID_DEFAULT"]
-          options = {
-              "method": "development",
-              "teamID": os.environ["IOS_TEAM_ID"],
-              "signingStyle": "manual",
-              "provisioningProfiles": {bundle: os.environ["IOS_PROFILE_NAME"]},
-          }
-          with open("build/ExportOptions.plist", "wb") as handle:
-              plistlib.dump(options, handle)
-          PY
-            set -o pipefail
-            xcodebuild -exportArchive \
-              -archivePath build/SpektraLab.xcarchive \
-              -exportOptionsPlist build/ExportOptions.plist \
-              -exportPath build/ipa \
-              2>&1 | tee build/export.log
-            # One name for both paths, so the release asset and the link in
-            # the README do not change with the signing path.
-            ipa=$(find build/ipa -maxdepth 1 -name '*.ipa' -print -quit)
-            if [ "$ipa" != "build/ipa/SpektraLab.ipa" ]; then
-              mv "$ipa" build/ipa/SpektraLab.ipa
-            fi
-            ls -la build/ipa
-            exit 0
-          fi
-
-          # The unsigned path: take the built .app, check it is a real bundle,
-          # ad-hoc sign it and zip it into Payload/. ditto (not zip) because
-          # it keeps the bundle's metadata and symlinks the way iOS expects.
-          app=$(find build/DerivedData/Build/Products/Release-iphoneos \
-                  -maxdepth 1 -name 'SpektraLab.app' -print -quit)
-          if [ -z "$app" ]; then
-            echo "::error::no Release-iphoneos/SpektraLab.app was built"
-            ls -la build/DerivedData/Build/Products || true
-            exit 1
-          fi
-          echo "packaging $app"
-          python3 - "$app/Info.plist" <<'PY'
-          import plistlib, sys
-          d = plistlib.load(open(sys.argv[1], "rb"))
-          for k in ("CFBundleIdentifier", "CFBundleExecutable",
-                    "CFBundleVersion", "CFBundleShortVersionString"):
-              print(f"  {k} = {d.get(k)!r}")
-          PY
-
-          # `ditto` with the fork/attribute flags rather than `cp -R`: the copy
-          # would inherit the build's extended attributes, and the archive step
-          # writes them back out as AppleDouble `._*` files next to the real
-          # ones -- detritus a signing service counts as part of the bundle,
-          # and detritus codesign itself refuses to seal. The find is a check
-          # that none survived, not a cleanup.
-          rm -rf build/Payload
-          mkdir -p build/Payload
-          ditto --norsrc --noextattr --noqtn "$app" build/Payload/SpektraLab.app
-          find build/Payload -name '._*' -print -quit
-
-          app_dir=build/Payload/SpektraLab.app
-          exe=$(plutil -extract CFBundleExecutable raw - < "$app_dir/Info.plist")
-
-          # Every file in a bundle except the main executable is data. Xcode's
-          # metal and asset-compile steps leave `default.metallib` and
-          # `Assets.car` with the executable bit set, and codesign reads an
-          # executable file inside a bundle as *nested code* -- unsigned nested
-          # code is what it refuses to seal ("code object is not signed at all /
-          # In subcomponent: ..."). Clearing the bit is the fix; signing those
-          # two files by hand only moves the refusal to the next one.
-          find "$app_dir" -type f -exec chmod a-x {} +
-          chmod a+x "$app_dir/$exe"
-
-          # Info.plist goes XML before the seal, not after: rewriting a sealed
-          # file breaks the seal. iOS reads either form, but a service that
-          # scrapes the bundle id out of the file as text reads nothing from a
-          # binary plist and reports "Missing bundle ID".
-          plutil -convert xml1 "$app_dir/Info.plist"
-          echo "Info.plist starts with: $(head -c 38 "$app_dir/Info.plist")"
-
-          # Ship an unsealed copy as well. SideStore/AltStore re-sign with
-          # `ldid`, which rewrites only the main executable; an ad-hoc seal
-          # made here also covered the metallibs and `Assets.car`, so after a
-          # re-sign the bundle and its `_CodeSignature` disagree and the
-          # install dies at IXPlaceholder with "Failed to get bundle ID".
-          # The unsealed IPA is what a re-signer wants: nothing to inherit.
-          # `zip`, not `ditto -c -k`: ditto streams and therefore sets the
-          # data-descriptor flag on every file entry, which some extractors --
-          # including ones on iOS -- mishandle. What goes missing first is
-          # `Info.plist`, and the installer then reports "Missing bundle ID".
-          (cd build && zip -qry ipa/SpektraLab-unsigned.ipa Payload)
-
-          # A bundle with no `_CodeSignature` is an incomplete app bundle: a
-          # re-signer reads the identifier out of the existing signature to know
-          # what it is replacing, and an installer handed a bare directory
-          # reports the bundle id as missing. Xcode skips its CodeSign phase
-          # without signing material (and `AD_HOC_CODE_SIGNING_ALLOWED` does not
-          # change that), so the seal is made here instead.
-          # Best-effort only. A re-signer replaces this signature anyway, and
-          # an installer reads the bundle id from Info.plist -- so a seal that
-          # cannot be made must never stop the IPA from being published.
-          if [ -d "$app_dir/Frameworks" ]; then
-            find "$app_dir/Frameworks" -depth \
-              \( -name '*.framework' -o -name '*.appex' -o -name '*.dylib' \) -print0 |
-            while IFS= read -r -d '' nested; do
-              codesign --force --sign - --timestamp=none "$nested" || true
-            done
-          fi
-          # `MTLB` is not a Mach-O header, but codesign counts a `.metallib`
-          # as a code object and will not seal the app while one is unsigned
-          # ("code object is not signed at all / In subcomponent: ..."). Seal
-          # them first; clearing the executable bit does not help, because the
-          # decision is made on the file rather than its mode.
-          find "$app_dir" -name '*.metallib' -print0 |
-          while IFS= read -r -d '' lib; do
-            echo "  sealing $(basename "$lib")"
-            codesign --force --sign - --timestamp=none "$lib" 2>&1 | sed 's/^/    /' || true
-          done
-
-          # `--deep` seals every nested code object the bundle contains in one
-          # pass -- the metallibs, `Assets.car`, anything a future Xcode adds.
-          # Hand-listing them was whack-a-mole: sealing the metallibs simply
-          # moved the refusal on to `Assets.car`.
-          # `--identifier` so the seal carries `com.hanze.spektralab`, the
-          # same string as CFBundleIdentifier. Without it codesign invents
-          # `SpektraLab-<uuid>`, and a re-signer that reads the identifier
-          # out of the existing signature then acts on the wrong one.
-          app_id=$(plutil -extract CFBundleIdentifier raw - < "$app_dir/Info.plist")
-          if codesign --force --deep --sign - --timestamp=none \
-               --identifier "$app_id" "$app_dir" 2>&1 | sed 's/^/  /'
+          exported=0
+          if xcodebuild -exportArchive \
+               -archivePath build/SpektraLab.xcarchive \
+               -exportOptionsPlist build/ExportOptions.plist \
+               -exportPath build/ipa \
+               2>&1 | tee build/export.log
           then
-            echo "sealed the bundle ad-hoc"
+            exported=1
+            echo "::notice::-exportArchive produced the IPA"
           else
-            echo "::warning::could not seal the bundle ad-hoc; the IPA is still re-signable by SideStore/AltStore, which only needs Payload/*.app/Info.plist"
+            echo "::warning::-exportArchive refused; packing the .app from the archive by hand"
           fi
 
-          # The identifier the seal carries is the one an installer will look
-          # for, so it has to be the same string as CFBundleIdentifier.
-          bundle_id=$(plutil -extract CFBundleIdentifier raw - < "$app_dir/Info.plist")
-          # `codesign -dv` and `codesign --verify` both exit non-zero on an
-          # unsigned bundle; under `set -e` that aborted packaging of an IPA
-          # whose Info.plist was already correct. Neither is a reason to fail.
-          sealed_id=$( { codesign -dv --verbose=4 "$app_dir" 2>&1 || true; } \
-                       | sed -n 's/^Identifier=//p')
-          echo "bundle id:   $bundle_id"
-          echo "sealed id:   ${sealed_id:-<unsigned>}"
-          { codesign --verify --verbose=2 "$app_dir" 2>&1 || true; } | sed 's/^/  /'
-          if [ "$sealed_id" = "$bundle_id" ]; then
-            echo "the seal and Info.plist agree"
-          else
-            echo "::warning::the seal identifies '${sealed_id:-<none>}' but CFBundleIdentifier is '$bundle_id'"
+          # Fallback: without a certificate -exportArchive can refuse. The .app
+          # inside the .xcarchive is complete, so pack that; SideStore re-signs
+          # anyway, so an unsigned IPA is fine.
+          if [ "$exported" -eq 0 ]; then
+            app=$(find build/SpektraLab.xcarchive/Products/Applications \
+                    -maxdepth 1 -name '*.app' -print -quit)
+            if [ -z "$app" ]; then
+              echo "::error::the archive contains no .app"
+              ls -la build/SpektraLab.xcarchive/Products/Applications || true
+              exit 1
+            fi
+            rm -rf build/Payload
+            mkdir -p build/Payload
+            ditto --norsrc --noextattr --noqtn "$app" "build/Payload/$(basename "$app")"
+            ( cd build && zip -qry ipa/SpektraLab.ipa Payload )
           fi
-          ls -la "$app_dir/_CodeSignature" || true
 
-          # `--norsrc --noextattr --noqtn`: sealing writes extended
-          # attributes onto the metallibs and `Assets.car`, and a plain
-          # `ditto -c -k` turns each one into an AppleDouble `._*` entry in
-          # the zip. On the device those unpack as real files beside the
-          # originals, and the seal then does not match what is there.
-          (cd build && zip -qry ipa/SpektraLab.ipa Payload)
+          echo "==> what came out"
           ls -la build/ipa
-
-          # Check the archive itself rather than the staging directory: the
-          # thing a signing service chokes on is what is inside the zip, and a
-          # `Payload/` path that is one level off looks fine right up until it
-          # does not install.
-          # Guard against a regression to a streaming zipper: a data
-          # descriptor on any entry is what broke the iOS install.
-          python3 - build/ipa/SpektraLab-unsigned.ipa build/ipa/SpektraLab.ipa <<'PY'
-          import sys, zipfile
-          for path in sys.argv[1:]:
-              z = zipfile.ZipFile(path)
-              bad = [i.filename for i in z.infolist() if i.flag_bits & 0x08]
-              if bad:
-                  print(f"::error file={path}::{len(bad)} entries carry a data "
-                        f"descriptor, e.g. {bad[0]}")
-                  sys.exit(1)
-              print(f"{path}: {len(z.infolist())} entries, none with a data descriptor")
-          PY
-          unzip -l build/ipa/SpektraLab.ipa | sed -n '1,5p'
-          unzip -p build/ipa/SpektraLab.ipa Payload/SpektraLab.app/Info.plist > build/shipped.plist
-          echo "shipped Info.plist starts with: $(head -c 38 build/shipped.plist)"
-          echo "shipped bundle id: $(plutil -extract CFBundleIdentifier raw - < build/shipped.plist)"
-          echo "shipped executable: $(plutil -extract CFBundleExecutable raw - < build/shipped.plist)"
-          echo "shipped minimum iOS: $(plutil -extract MinimumOSVersion raw - < build/shipped.plist)"
-          # Checked in the zip, not the staging directory: this is the file a
-          # re-signer and an installer each look for, and a seal that did not
-          # make it into `Payload/` is the same as no seal at all.
-          if unzip -l build/ipa/SpektraLab.ipa | grep -q '_CodeSignature/CodeResources'
-          then
-            echo "the archive carries the code signature"
+          plist=$(unzip -Z1 build/ipa/SpektraLab.ipa | grep '\.app/Info\.plist$' | head -1)
+          echo "  bundle plist      : $plist"
+          unzip -p build/ipa/SpektraLab.ipa "$plist" > build/shipped.plist
+          echo "  CFBundleIdentifier: $(plutil -extract CFBundleIdentifier raw - < build/shipped.plist)"
+          echo "  CFBundleExecutable: $(plutil -extract CFBundleExecutable raw - < build/shipped.plist)"
+          if plutil -extract CFBundleIcons xml1 -o /dev/null build/shipped.plist 2>/dev/null; then
+            echo "  CFBundleIcons     : yes"
           else
-            echo "::warning::the archive has no _CodeSignature; SideStore and other re-signers expect one"
+            echo "::warning::the shipped bundle declares no icon (CFBundleIcons missing)"
           fi
-          echo "::notice::build/ipa/SpektraLab.ipa is not device-installable as it stands: re-sign it with your own Apple ID (AltStore/Sideloadly/Xcode), or set the seven signing secrets to get a signed export."
+          echo "  RequiredCaps      : $(plutil -extract UIRequiredDeviceCapabilities json -o - build/shipped.plist 2>/dev/null || echo none)"
+          unzip -l build/ipa/SpektraLab.ipa | sed -n '1,6p'
+          echo "==> guard: no data descriptors"
+          python3 -c "import zipfile,sys;z=zipfile.ZipFile('build/ipa/SpektraLab.ipa');bad=[i.filename for i in z.infolist() if i.flag_bits \& 0x08];print('  entries:',len(z.infolist()),'| data descriptors:',len(bad));sys.exit(1 if bad else 0)"
 
       - name: Upload the IPA
         if: always()
@@ -565,17 +371,15 @@ jobs:
           # 装到手机上还是旧包」的成因。
           tag="${GITHUB_SHA::7}"
           mkdir -p build/release
-          cp build/ipa/SpektraLab.ipa          "build/release/SpektraLab-$tag.ipa"
-          cp build/ipa/SpektraLab-unsigned.ipa "build/release/SpektraLab-$tag-unsigned.ipa"
-          echo "publishing SpektraLab-$tag.ipa and SpektraLab-$tag-unsigned.ipa"
+          cp build/ipa/SpektraLab.ipa "build/release/SpektraLab-$tag.ipa"
+          echo "publishing SpektraLab-$tag.ipa"
 
           gh release delete latest --yes --cleanup-tag 2>/dev/null || true
           gh release create latest \
             --target "$GITHUB_SHA" \
             --title "SpektraLab 最新构建（${tag}）" \
             --notes-file "$notes" \
-            "build/release/SpektraLab-$tag.ipa" \
-            "build/release/SpektraLab-$tag-unsigned.ipa"
+            "build/release/SpektraLab-$tag.ipa"
           gh release view latest --json url,assets \
             --jq '.url, (.assets[] | "\(.name)  \(.size) bytes")'
 
