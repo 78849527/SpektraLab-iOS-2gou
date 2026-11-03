@@ -13,8 +13,8 @@
 | 项 | 值 |
 |---|---|
 | release | <https://github.com/Minerchu/SpektraLab-iOS/releases/tag/latest> |
-| 资产 | `SpektraLab.ipa`，9 657 105 bytes |
-| 直链 | <https://github.com/Minerchu/SpektraLab-iOS/releases/latest/download/SpektraLab.ipa> |
+| 资产 | `SpektraLab-<提交号>.ipa`（**文件名带提交号，见下方「已解决」一节**） |
+| 直链 | 打开 <https://github.com/Minerchu/SpektraLab-iOS/releases/tag/latest> 下载 |
 | 匿名可下载 | 是（仓库 public，链接 302 到资产，zip 以 `Payload/` 开头） |
 
 滚动替换在 run `41620080899`（commit `d4389cf94a`）上验证过：`latest` tag 跟着
@@ -97,6 +97,44 @@ profile(跳过) → say what is missing → Build(通过) → Package the IPA �
 
 签名相关 secret 全部未配置，所以 `Install the signing certificate` / `Install the
 provisioning profile` 两步被跳过，`ExportOptions.plist` 走 ad-hoc 分支。
+
+## 已解决：SideStore 装不上，报 `Failed to get bundle ID`
+
+**症状**：`IXErrorDomain Code=13 "Failed to get bundle ID from
+.../Extracted/Payload/App.app"`。
+
+**根因（两条叠加）**：
+
+1. **release 资产的 CDN 缓存**。`releases/download/latest/<固定名>` 这个 URL 在资产
+   **同名替换**之后，仍会继续返回旧文件一段时间。旧包的 `Payload/` 下是 `App.app`、
+   Info.plist 也不对 → 安装器读不到 bundle id。用 API 取的却是新包，所以「CI 明明
+   修好了、装上去还是旧包」。
+2. **当时打包链路本身也是断的**：`fetch-engine.py` 在 141/239 个文件处 `HTTP 404`
+   （raw.githubusercontent.com 限流时会伪装成 404），最新代码从来没跑到打包步骤。
+
+**已修**：
+
+- 资产名带提交号 `SpektraLab-<sha>.ipa`，URL 唯一，撞不上缓存；README 改指 release 页面。
+- `fetch-engine.py`：改走 tree + **blob API**（`/git/blobs/{sha}`），不再用
+  `download_url`；重试列表补上 **500**。本地实测 239/239 文件、17.2MB。
+- 打包：`plutil -convert xml1`（Info.plist 用 XML，有些工具只认文本）；
+  `ditto --norsrc --noextattr`（codesign 写的扩展属性会被 `ditto -c -k` 变成
+  AppleDouble `._*`，在设备上和原文件并排存在，安装器会算进 bundle）；
+  `codesign --force --deep --sign - --identifier <bundleid>`（metallib / `Assets.car`
+  都被 codesign 当成 code，必须 `--deep` 一次封完；不给 `--identifier` 它会自己编一个
+  `SpektraLab-<uuid>`，和 CFBundleIdentifier 不一致）；`codesign --verify` 失败不再致命。
+
+**验收（`SpektraLab-b4081e6.ipa`，9.67MB）**：`Payload/SpektraLab.app`、Info.plist 为
+XML、`CFBundleIdentifier=com.hanze.spektralab`、arm64、`MinimumOSVersion=16.0`、
+`_CodeSignature/CodeResources` 存在、**零 AppleDouble**。
+
+**IPA 装不上时的检查顺序**：
+
+1. `unzip -l` 看 `Payload/` 下的 `.app` 目录名；
+2. `.app/Info.plist` 是 XML 还是 binary、有没有 `CFBundleIdentifier`；
+3. 有没有 `._*`；
+4. 有没有 `_CodeSignature`；
+5. 下载名是固定的 → 先怀疑 CDN 缓存。
 
 ## 当前卡点的精确诊断
 
