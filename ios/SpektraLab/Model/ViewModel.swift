@@ -291,7 +291,10 @@ final class ViewModel: ObservableObject {
             state = .failed(error.localizedDescription)
             statusText = "渲染失败"
         }
-        if previous == .failed { state = .ready }
+        // `if case`, not `==`: `.failed` carries a message, so the case
+        // pattern is what matches it. Written as `==` the compiler looks for
+        // an `==` that takes a `.failed` and finds none.
+        if case .failed = previous { state = .ready }
     }
 
     // MARK: - exporting
