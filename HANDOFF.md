@@ -5,8 +5,24 @@
 
 ## 一句话现状
 
-**编译 100% 通过；`Build` 步骤通过；`Package the IPA` 已改成「签名失败不致命」，
-正在等第一份 IPA 工件落地。**
+**CI 已全绿：`Build` → `Package the IPA` → `Publish the IPA` 全部通过，
+每轮 main 上的成功构建会把 IPA 发到一个滚动的 `latest` release，README 顶部有直链。**
+
+已验证的产物（run `41619153990`，commit `1e48960873`）：
+
+| 项 | 值 |
+|---|---|
+| release | <https://github.com/Minerchu/SpektraLab-iOS/releases/tag/latest> |
+| 资产 | `SpektraLab.ipa`，9 657 104 bytes |
+| 直链 | <https://github.com/Minerchu/SpektraLab-iOS/releases/latest/download/SpektraLab.ipa> |
+| 匿名可下载 | 是（仓库 public，链接 302 到资产，zip 以 `Payload/` 开头） |
+
+**这个 IPA 仍然装不上真机**：没有证书与描述文件，bundle 里没有效签名
+（`codesign` 的 ad-hoc 封装被 `Assets.car` / `default.metallib` 拒绝，见下面最后一个坑）。
+用户侧要么用 AltStore / Sideloadly / Xcode 以自己的 Apple ID 重签，
+要么配齐下面那 7 个 secret 走正规签名路径。
+
+### archive 为什么不能用（已绕开，勿再排查）
 
 根因（已确认并绕开）：archive 在写 `.xcarchive/Info.plist` 时是**从代码签名里**读取
 bundle id / Team 的。CI runner 上没有证书与描述文件，归档出来的 .app
@@ -15,20 +31,21 @@ bundle id / Team 的。CI runner 上没有证书与描述文件，归档出来�
 改 `CODE_SIGN_STYLE`、去 `VALIDATE_PRODUCT`、加 `CODE_SIGNING_ALLOWED=NO` **全都无效**
 —— 病根从来不在这些地方。
 
-**现在的 CI 结构**（`.github/workflows/build-ios.yml`，共 15 步）：
+**现在的 CI 结构**（`.github/workflows/build-ios.yml`，共 16 步）：
 
 - `Build`：签名 secret 齐全 → 走 `archive`；否则 → 直接
   `xcodebuild ... build CODE_SIGNING_ALLOWED=NO`，产出
   `Release-iphoneos/SpektraLab.app`，并把 `BUILD_MODE=archive|package` 写进
-  `$GITHUB_ENV`。**这一步已经全绿。**
+  `$GITHUB_ENV`。
 - `Package the IPA`：archive 模式用 `plistlib` 生成 `ExportOptions.plist`
-  后走 `-exportArchive`；package 模式把 .app 拷进 `Payload/`，给自己和嵌套的
-  `*.metallib` 做 ad-hoc 签名，再用 `ditto -c -k --keepParent` 打成
-  `build/ipa/SpektraLab-unsigned.ipa`（用 `ditto` 不用 `zip`：iOS 需要它保留的
-  bundle 元数据与符号链接）。
-
-所以**无 secret 也能出 IPA 工件**，但它是 ad-hoc 签名、装不上真机 ——
-要么用 AltStore/Xcode 以自己的 Apple ID 重签，要么配齐下面那 7 个 secret 走正规签名路径。
+  后走 `-exportArchive`；package 模式把 .app 拷进 `Payload/`，先 ad-hoc 签名
+  嵌套的 `*.metallib` 再签 bundle，最后用 `ditto -c -k --keepParent` 打包
+  （用 `ditto` 不用 `zip`：iOS 需要它保留的 bundle 元数据与符号链接）。
+  **两条路径都归一成 `build/ipa/SpektraLab.ipa`**，这样 release 资产名和
+  README 直链不会随签名路径变化。
+- `Publish the IPA`：`gh release` 维护一个打 `latest` tag 的滚动 release。
+  先 `delete --cleanup-tag` 再 `create --target $GITHUB_SHA`，因为
+  `gh release create` 搬不动已存在的 tag。只在 `main` 且全绿时执行。
 
 ### 最后一个坑（run `41614070312`，已修）
 
@@ -225,8 +242,20 @@ IOS_BUNDLE_ID
 ```
 GET /repos/Minerchu/SpektraLab-iOS/actions/runs?per_page=3
 GET /repos/Minerchu/SpektraLab-iOS/actions/runs/{id}/jobs
-GET /repos/Minerchu/SpektraLab-iOS/actions/runs/{id}/logs   # zip，解压看 ipa/13_Build.txt
+GET /repos/Minerchu/SpektraLab-iOS/actions/runs/{id}/logs   # zip，解压看 ipa/NN_步骤名.txt
+GET /repos/Minerchu/SpektraLab-iOS/releases/latest          # 发布后的资产与直链
 ```
+
+`work/fetch_logs.py <run_id> [步骤名]` 已经把上面这套包好了：一次抓整个 logs.zip
+并缓存成 `log<run_id>.zip`，然后按步骤名打印尾部日志（顺手剥掉每行的时间戳前缀）。
+日志会在一段时间后被清理，失败后要尽快取。
+
+取 artifact 或 release 的 zip 时有个坑：`archive_download_url` 会 302 到
+`*.blob.core.windows.net`，如果继续带着 `Authorization: token ghp_...` 去跟这个
+重定向，Azure 会以「Server failed to authenticate the request」回 403。要么禁掉
+自动重定向、拿 `Location` 后裸取，要么直接走 release 的公开直链（仓库 public）。
+本机代理还会掐大文件（约 500 KB 一次 `SSL record layer failure`），所以下载要带
+`Range` 续传重试 —— `work/` 里的取法就是这样跑通的。
 
 `Build` 步骤的失败诊断输出已写进 workflow，会打印 `.app` 与源码 plist 的
 `CFBundleIdentifier`、`.xcarchive/Info.plist`、`codesign -dv` 结果、
