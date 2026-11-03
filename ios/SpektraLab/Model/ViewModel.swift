@@ -236,7 +236,11 @@ final class ViewModel: ObservableObject {
     func scheduleRender() {
         needsRender = true
         guard !renderInFlight else { return }
-        renderTask = Task { [weak self] in
+        // `@MainActor` on the closure: `Task { ... }` is `@Sendable` by
+        // default, and a closure that captures a `MainActor`-isolated
+        // `ViewModel` is not Sendable unless the closure says where it
+        // runs. Without this, Swift 6's strict concurrency rejects it.
+        renderTask = Task { @MainActor [weak self] in
             // A short settle, so a drag does not render on every frame. The
             // preview is a reprint of a cached negative — fast — but not free.
             try? await Task.sleep(nanoseconds: 90_000_000)
