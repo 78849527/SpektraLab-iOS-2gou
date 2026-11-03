@@ -428,13 +428,22 @@ jobs:
               codesign --force --sign - --timestamp=none "$nested" || true
             done
           fi
+          # `MTLB` is not a Mach-O header, but codesign counts a `.metallib`
+          # as a code object and will not seal the app while one is unsigned
+          # ("code object is not signed at all / In subcomponent: ..."). Seal
+          # them first; clearing the executable bit does not help, because the
+          # decision is made on the file rather than its mode.
+          find "$app_dir" -name '*.metallib' -print0 |
+          while IFS= read -r -d '' lib; do
+            echo "  sealing $(basename "$lib")"
+            codesign --force --sign - --timestamp=none "$lib" 2>&1 | sed 's/^/    /' || true
+          done
+
           if codesign --force --sign - --timestamp=none "$app_dir" 2>&1 | sed 's/^/  /'
           then
             echo "sealed the bundle ad-hoc"
           else
-            echo "::warning::could not seal the bundle ad-hoc; the IPA is still\n"
-            echo "::warning::re-signable by SideStore/AltStore, which replaces the\n"
-            echo "::warning::signature and only needs Payload/*.app/Info.plist"
+            echo "::warning::could not seal the bundle ad-hoc; the IPA is still re-signable by SideStore/AltStore, which only needs Payload/*.app/Info.plist"
           fi
 
           # The identifier the seal carries is the one an installer will look
