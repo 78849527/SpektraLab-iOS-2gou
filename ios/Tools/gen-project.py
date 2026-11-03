@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -435,6 +436,30 @@ def scheme(text: str) -> str:
 """
 
 
+def write_infoplist_bundle_id() -> None:
+    """Put the concrete bundle id in Info.plist.
+
+    `$(PRODUCT_BUNDLE_IDENTIFIER)` is normally expanded by
+    `builtin-infoPlistUtility -expandbuildsettings`, but an archive can still
+    end up with "Archive Missing Bundle Identifier" when the validation pass
+    reads the app's Info.plist and the key did not survive. Writing the value
+    literally removes the build-setting substitution from the archive path
+    altogether; the `PRODUCT_BUNDLE_IDENTIFIER` setting stays for anything
+    else that wants it. Idempotent, and driven by the same BUNDLE_ID (secret
+    or default) as the build setting.
+    """
+    path = ROOT / APP / "Info.plist"
+    text = path.read_text(encoding="utf-8")
+    pattern = re.compile(
+        r"(<key>CFBundleIdentifier</key>\s*<string>)[^<]*(</string>)")
+    replaced, hits = pattern.subn(
+        lambda m: m.group(1) + BUNDLE_ID + m.group(2), text)
+    assert hits == 1, f"expected one CFBundleIdentifier in {path}, found {hits}"
+    if replaced != text:
+        path.write_text(replaced, encoding="utf-8")
+        print(f"wrote {path} (CFBundleIdentifier = {BUNDLE_ID})")
+
+
 def main() -> None:
     out = ROOT / f"{APP}.xcodeproj" / "project.pbxproj"
     text = build()
@@ -444,6 +469,10 @@ def main() -> None:
 
     if "--check" in sys.argv:
         stale = False
+        ip = ROOT / APP / "Info.plist"
+        if BUNDLE_ID not in ip.read_text(encoding="utf-8"):
+            print("Info.plist has no concrete bundle id; run ios/Tools/gen-project.py")
+            stale = True
         if not out.exists() or out.read_text(encoding="utf-8") != text:
             print("project.pbxproj is stale; run ios/Tools/gen-project.py")
             stale = True
@@ -455,6 +484,7 @@ def main() -> None:
         print("project.pbxproj and the scheme are current")
         return
 
+    write_infoplist_bundle_id()
     out.parent.mkdir(exist_ok=True)
     out.write_text(text, encoding="utf-8")
     print(f"wrote {out}")
