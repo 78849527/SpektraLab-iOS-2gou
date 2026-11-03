@@ -288,6 +288,14 @@ jobs:
             # root-level `default.metallib` -- a hand-run codesign refuses
             # exactly that combination. Ask Xcode to do it.
             #
+            # `AD_HOC_CODE_SIGNING_ALLOWED=YES` is the part that makes it
+            # happen: for an iOS device target Xcode 16 defaults that setting to
+            # NO, and with identity "-" and no team it then skips the CodeSign
+            # phase quietly -- the build succeeds, the .app ships with no
+            # `_CodeSignature` at all, and every tool downstream reports
+            # "Missing bundle ID" because the bundle id is read from a signature
+            # that is not there.
+            #
             # If the seal still fails, rebuild unsigned rather than lose the
             # run: the artifact matters more than the seal, and the packaging
             # step reports which of the two the bundle got.
@@ -297,9 +305,9 @@ jobs:
               -configuration Release \
               -derivedDataPath build/DerivedData \
               -destination "generic/platform=iOS" \
-              build 2>&1 | tee build/xcodebuild.log
+              build AD_HOC_CODE_SIGNING_ALLOWED=YES 2>&1 | tee build/xcodebuild.log
             then
-              echo "built with Xcode's ad-hoc seal"
+              echo "the build finished; the packaging step reports whether the bundle was sealed"
             else
               echo "::warning::Xcode could not build with the ad-hoc seal; rebuilding unsigned"
               xcodebuild -project ios/SpektraLab.xcodeproj \
