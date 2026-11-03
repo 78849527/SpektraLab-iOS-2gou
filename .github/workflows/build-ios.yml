@@ -281,17 +281,35 @@ jobs:
             echo "the archive is at build/SpektraLab.xcarchive"
           else
             echo "BUILD_MODE=package" >> "$GITHUB_ENV"
-            # No signing material: hand Xcode the compile, and do the
-            # signing and the packaging ourselves. CODE_SIGNING_ALLOWED=NO
-            # keeps it from trying to find a profile it does not have.
+            # No signing material, but the bundle is still sealable: the
+            # generated project asks for `CODE_SIGN_IDENTITY "-"` with no
+            # profile, which is ad-hoc, and Xcode's CodeSign phase is the only
+            # thing that seals an iOS bundle carrying `Assets.car` and a
+            # root-level `default.metallib` -- a hand-run codesign refuses
+            # exactly that combination. Ask Xcode to do it.
+            #
+            # If the seal still fails, rebuild unsigned rather than lose the
+            # run: the artifact matters more than the seal, and the packaging
+            # step reports which of the two the bundle got.
             set -o pipefail
-            xcodebuild -project ios/SpektraLab.xcodeproj \
+            if xcodebuild -project ios/SpektraLab.xcodeproj \
               -scheme SpektraLab \
               -configuration Release \
               -derivedDataPath build/DerivedData \
               -destination "generic/platform=iOS" \
-              build CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/xcodebuild.log
-            echo "built the unsigned .app; it is signed ad-hoc when it is packaged"
+              build 2>&1 | tee build/xcodebuild.log
+            then
+              echo "built with Xcode's ad-hoc seal"
+            else
+              echo "::warning::Xcode could not build with the ad-hoc seal; rebuilding unsigned"
+              xcodebuild -project ios/SpektraLab.xcodeproj \
+                -scheme SpektraLab \
+                -configuration Release \
+                -derivedDataPath build/DerivedData \
+                -destination "generic/platform=iOS" \
+                build CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/xcodebuild-unsigned.log
+              echo "built the unsigned .app"
+            fi
           fi
 
       - name: Package the IPA
@@ -355,38 +373,33 @@ jobs:
               print(f"  {k} = {d.get(k)!r}")
           PY
 
+          # `ditto` with the fork/attribute flags rather than `cp -R`: the copy
+          # would inherit the build's extended attributes, and the archive step
+          # writes them back out as AppleDouble `._*` files next to the real
+          # ones -- detritus a signing service counts as part of the bundle,
+          # and detritus codesign itself refuses to seal. The find is a check
+          # that none survived, not a cleanup.
           rm -rf build/Payload
           mkdir -p build/Payload
-          cp -R "$app" build/Payload/SpektraLab.app
+          ditto --norsrc --noextattr --noqtn "$app" build/Payload/SpektraLab.app
+          find build/Payload -name '._*' -print -quit
 
-          # Xcode writes the bundle's Info.plist as a *binary* plist. iOS reads
-          # either form, but a re-signing or installation service that scrapes
-          # the bundle id out of the file as text finds nothing in a binary one
-          # and reports "Missing bundle ID" -- which is an unusable IPA, so the
-          # artifact carries the form every parser reads. The conversion is
-          # before the seal below because rewriting a sealed file breaks it.
-          plutil -convert xml1 build/Payload/SpektraLab.app/Info.plist
-          echo "Info.plist now starts with: $(head -c 38 build/Payload/SpektraLab.app/Info.plist)"
-
-          # Ad-hoc: no identity, no profile. A device refuses to install this
-          # either way, so the signature seals resources and nothing more --
-          # it is a nicety, not a gate, and a failure warns instead of
-          # throwing away an artifact that took forty minutes to build.
-          #
-          # The nicety is why the libraries are signed first: codesign walks a
-          # bundle's nested code before sealing the bundle, and refuses to seal
-          # one containing an unsigned code object. Xcode drops the app's own
-          # `default.metallib` -- compiled from Canvas.metal -- at the bundle
-          # root, and codesign sniffs it as one.
-          find build/Payload/SpektraLab.app -name '*.metallib' -print0 |
-          while IFS= read -r -d '' lib; do
-            codesign --force --sign - --timestamp=none "$lib" \
-              || echo "  not signable: $lib"
-          done
-          if codesign --force --sign - --timestamp=none build/Payload/SpektraLab.app; then
-            codesign -dv build/Payload/SpektraLab.app 2>&1 | sed 's/^/  /'
+          # Xcode's seal is the one that works here. A hand-run `codesign`
+          # refuses this bundle because it sniffs `Assets.car` and
+          # `default.metallib` as unsigned nested code, while Xcode's CodeSign
+          # phase seals bundles containing exactly those files every day -- so
+          # the seal is asked for in the build step, and verified here.
+          if codesign --verify --verbose=1 build/Payload/SpektraLab.app 2>&1 | sed 's/^/  /'
+          then
+            echo "the bundle is sealed by Xcode: the bundle id is readable from the signature"
           else
-            echo "::warning::ad-hoc codesign failed; the IPA ships with no signature at all"
+            echo "::warning::the bundle has no signature; the IPA must be re-signed before a device will take it"
+            # With no seal there is nothing to break. Xcode writes Info.plist
+            # as a *binary* plist; iOS reads either form, but a service that
+            # scrapes the bundle id out of the file as text reads nothing and
+            # reports "Missing bundle ID", so the unsigned artifact ships XML.
+            plutil -convert xml1 build/Payload/SpektraLab.app/Info.plist
+            echo "Info.plist now starts with: $(head -c 38 build/Payload/SpektraLab.app/Info.plist)"
           fi
 
           (cd build && ditto -c -k --keepParent Payload ipa/SpektraLab.ipa)
