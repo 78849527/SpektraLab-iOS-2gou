@@ -180,8 +180,11 @@ struct ContentView: View {
                             .foregroundStyle(deck == tab ? Color.labCream : Color.secondary)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 7)
-                            .background(deck == tab ? Color.white.opacity(0.10) : Color.clear,
+                            .background(deck == tab ? Color.white.opacity(0.14) : Color.clear,
                                         in: Capsule())
+                            .overlay {
+                                Capsule().stroke(Color.white.opacity(0.10), lineWidth: 1)
+                            }
                     }
                     .buttonStyle(.plain)
                 }
@@ -200,14 +203,14 @@ struct ContentView: View {
 
             statusBar
         }
-        .background(Color.labPanel)
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.white.opacity(0.07), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
         }
-        .padding(.horizontal, 8)
-        .padding(.bottom, 8)
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
     }
 
     @ViewBuilder

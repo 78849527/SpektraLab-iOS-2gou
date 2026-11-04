@@ -83,6 +83,7 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
 
     /// The transform's parameters, uploaded to the GPU once per change.
     private var transformBuffer: MTLBuffer?
+    private var sourceAspect: CGFloat?
 
     init?(device: MTLDevice) {
         guard let queue = device.makeCommandQueue() else { return nil }
@@ -134,6 +135,8 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
     /// The texture to show.
     func setTexture(_ texture: MTLTexture?) {
         self.texture = texture
+        sourceAspect = texture.map { CGFloat($0.width) / CGFloat($0.height) }
+        uploadTransform()
     }
 
     /// The working space → display transform.
@@ -170,6 +173,27 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
         params.targetMode = UInt32(transform.targetCCTFMode)
         params.gamutActive = transform.gamutCompressActive ? 1 : 0
         memcpy(buffer.contents(), &params, MemoryLayout<Params>.size)
+        uploadFrame()
+    }
+
+    /// Copy an aspect-preserving source frame to the shader constants.
+    ///
+    /// The destination frame in the current layout is 2:3. The four values are
+    /// written after the packed transform, at a fixed 16-byte offset; the
+    /// shader reads them as one `float4`.
+    private func uploadFrame() {
+        guard let buffer, let aspect = sourceAspect, aspect > 0 else { return }
+        let drawableAspect = 2.0 / 3.0
+        var width = CGFloat(1)
+        var height = CGFloat(1)
+        if aspect > drawableAspect {
+            width = drawableAspect / aspect
+        } else {
+            height = aspect / drawableAspect
+        }
+        let frame = SIMD4<Float>(Float(-width / 2), Float(width / 2),
+                                 Float(-height / 2), Float(height / 2))
+        memcpy(buffer.contents().advanced(by: 16), &frame, MemoryLayout<SIMD4<Float>>.size)
     }
 
     // MARK: - MTKViewDelegate

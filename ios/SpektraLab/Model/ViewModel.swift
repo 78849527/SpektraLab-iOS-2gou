@@ -83,7 +83,9 @@ final class ViewModel: ObservableObject {
 
     /// The picked photo, kept so it can be re-decoded at full size for export.
     private var pickedItem: PhotosPickerItem?
-    private var pickedImage: UIImage?
+    /// Original bytes for the full-resolution export; a preview-only
+    /// transferable must never replace them.
+    private var originalData: Data?
 
     /// The decoded frame in the engine's input space.
     private var frame: DecodedFrame?
@@ -169,6 +171,16 @@ final class ViewModel: ObservableObject {
 
     // MARK: - importing
 
+    /// Load original bytes, preferring a RAW representation when the picker
+    /// exposes one. Plain `Data.self` is re-encoded by Photos for RAW assets.
+    private static func loadData(from item: PhotosPickerItem) async throws -> Data {
+        if let raw = try? await item.loadTransferable(type: PickedImageData.self)?.data,
+           !raw.isEmpty {
+            return raw
+        }
+        return try await item.loadTransferable(type: Data.self) ?? Data()
+    }
+
     /// A bounded centre crop of the picked image, for the filter strip.
     ///
     /// Made from the original file bytes rather than the decoded float frame:
@@ -196,9 +208,11 @@ final class ViewModel: ObservableObject {
         statusText = "正在读取照片…"
 
         do {
-            guard let data = try await item.loadTransferable(type: Data.self), !data.isEmpty else {
+            let data = try await Self.loadData(from: item)
+            guard !data.isEmpty else {
                 throw DecodeError.unreadable("照片没有返回数据")
             }
+            originalData = data
             // The preview decode is small: the live tier renders at 2048 px on
             // the long edge, so a bigger decode buys nothing and costs
             // seconds and hundreds of megabytes.
@@ -389,7 +403,7 @@ final class ViewModel: ObservableObject {
     /// from the original file rather than the preview, so the exported file
     /// is as large as the photo was.
     func exportToPhotos() async {
-        guard let engine, let pickedItem else {
+        guard let engine, let originalData else {
             statusText = "还没有可导出的照片"
             return
         }
@@ -397,11 +411,7 @@ final class ViewModel: ObservableObject {
         statusText = "正在导出原始分辨率…"
 
         do {
-            // Re-decode at full size.
-            guard let data = try await pickedItem.loadTransferable(type: Data.self), !data.isEmpty else {
-                throw DecodeError.unreadable("照片没有返回数据")
-            }
-            let full = try ImageDecoder.decode(data: data, maxLongEdge: nil)
+            let full = try ImageDecoder.decode(data: originalData, maxLongEdge: nil)
 
             // Reopen on the full frame, with the same stocks and parameters.
             var delta = ParamDefaults.delta(film: filmStock, paper: printStock)
@@ -425,7 +435,7 @@ final class ViewModel: ObservableObject {
             }
 
             let image = try await Self.makeImage(from: texture, rowStridePx: result.rowStridePx)
-            try await PhotoLibrary.save(image)
+            try await PhotoLibrary.saveJPEG(image)
 
             statusText = String(format: "已导出 %d×%d 到相册", result.width, result.height)
             state = .ready
@@ -557,22 +567,36 @@ struct PickedImageData: Transferable {
 /// Saving to the photo library, with the permission the app needs.
 enum PhotoLibrary {
     /// Ask for permission and save.
-    static func save(_ image: UIImage) async throws {
+    static func saveJPEG(_ image: UIImage) async throws {
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else {
             throw ExportError.permissionDenied
         }
+        guard let data = image.jpegData(compressionQuality: 0.92) else {
+            throw ExportError.encodingFailed
+        }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SpektraLab-\(UUID().uuidString).jpg")
+        do {
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            throw ExportError.encodingFailed
+        }
+        defer { try? FileManager.default.removeItem(at: url) }
         try await PHPhotoLibrary.shared().performChanges {
-            PHAssetChangeRequest.creationRequestForAsset(from: image)
+            PHAssetCreationRequest.forAsset()
+                .addResource(with: .photo, fileURL: url, options: nil)
         }
     }
 }
 
 enum ExportError: Error, CustomStringConvertible {
     case permissionDenied
+    case encodingFailed
     var description: String {
         switch self {
         case .permissionDenied: "没有相册写入权限，请在系统设置里允许"
+        case .encodingFailed: "照片编码失败，无法导出 JPEG"
         }
     }
 }

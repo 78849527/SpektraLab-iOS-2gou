@@ -80,6 +80,15 @@ enum ImageDecoder {
     /// for a result nobody sees. The export path decodes at full size.
     static let previewLongEdge = 2048
 
+    /// The colour space the pixel conversion below assumes. Core Image RAW
+    /// rendering is allowed to choose a wide-gamut output (for example Display
+    /// P3) unless the caller pins it. `CIRAWFilter.outputImage` does not
+    /// document that choice, and Core Graphics does not convert it later when
+    /// the CGImage reports a different space. Rendering into sRGB here makes
+    /// the iOS input match the explicit sRGB → linear ProPhoto conversion.
+    private static let sRGBSpace = CGColorSpace(name: CGColorSpace.sRGB)
+        ?? CGColorSpaceCreateDeviceRGB()
+
     /// Decode an image from data.
     ///
     /// - Parameter maxLongEdge: the long edge to scale to, or `nil` for no
@@ -100,7 +109,11 @@ enum ImageDecoder {
             // it before the float conversion keeps the peak lower.
             let rendered = autoreleasepool { () -> CGImage? in
                 guard let output = raw.outputImage else { return nil }
-                return CIContext().createCGImage(output, from: output.extent)
+                let context = CIContext(options: [.workingColorSpace: NSNull()])
+                return context.createCGImage(output,
+                                             from: output.extent,
+                                             format: .RGBA8,
+                                             colorSpace: sRGBSpace)
             }
             if let rendered {
                 return try decode(cgImage: rendered, maxLongEdge: maxLongEdge)
@@ -178,7 +191,7 @@ enum ImageDecoder {
         let factor = Double(longEdge) / Double(current)
         let newW = max(1, Int((Double(w) * factor).rounded()))
         let newH = max(1, Int((Double(h) * factor).rounded()))
-        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        let colorSpace = sRGBSpace
         guard let context = CGContext(data: nil, width: newW, height: newH,
                                       bitsPerComponent: 8, bytesPerRow: 0,
                                       space: colorSpace,
@@ -219,7 +232,7 @@ enum ImageDecoder {
 
         // Draw into a known 8-bit RGBA buffer.
         var buffer = [UInt8](repeating: 0, count: width * height * 4)
-        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        let colorSpace = sRGBSpace
         let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
         let drawn: CGImage? = buffer.withUnsafeMutableBytes { raw -> CGImage? in
             guard let base = raw.baseAddress,

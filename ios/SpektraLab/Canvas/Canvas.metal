@@ -98,7 +98,14 @@ float encodeTransfer(float value, uint mode) {
 
 fragment float4 canvasFragment(CanvasVertexOut in [[stage_in]],
                                texture2d<float> source [[texture(0)]],
-                               constant CanvasTransform& transform [[buffer(0)]]) {
+                               constant CanvasTransform& transform [[buffer(0)]],
+                               constant float4& frame [[buffer(0)]]) {
+    float2 position = (in.uv * 2.0 - 1.0) * float2(1.0, -1.0);
+    if (position.x < frame.minimum.x || position.x > frame.maximum.x ||
+        position.y < frame.minimum.y || position.y > frame.maximum.y) {
+        discard_fragment();
+    }
+
     constexpr sampler linearSampler(filter::linear, address::clamp_to_edge);
 
     float3 rgb = source.sample(linearSampler, in.uv).rgb;
