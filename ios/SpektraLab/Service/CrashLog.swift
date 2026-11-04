@@ -10,13 +10,31 @@
 //  per fatal signal for everything below that. The next launch reads the note
 //  and puts it on screen.
 //
-//  The handlers deliberately do very little. `UserDefaults` is not
-//  async-signal-safe, but it is the only storage reachable without opening a
-//  file inside a signal handler, and a note that occasionally fails to land is
-//  better than none. After recording, the default handler is restored and the
-//  signal re-raised so iOS still writes its own `.ips` report.
+//  The handlers are file-scope functions, not closures: `signal` takes a
+//  `@convention(c)` pointer, and Swift will not form one from a closure that
+//  captures context ("a C function pointer cannot be formed from a closure
+//  that captures context").
+//
+//  They deliberately do very little. `UserDefaults` is not async-signal-safe,
+//  but it is the only storage reachable without opening a file inside a signal
+//  handler, and a note that occasionally fails to land is better than none.
+//  After recording, the default handler is restored and the signal re-raised
+//  so iOS still writes its own `.ips` report.
 
 import Foundation
+
+/// Objective-C exceptions that would otherwise terminate silently.
+private func spektraUncaughtException(_ exception: NSException) {
+    CrashLog.record("exception \(exception.name.rawValue) — \(exception.reason ?? "no reason")")
+}
+
+/// Fatal signals: bad access, abort, bad instruction, arithmetic, trap.
+private func spektraFatalSignal(_ received: Int32) {
+    CrashLog.record("signal \(received)")
+    // Hand the signal back to the system so the .ips report is still written.
+    signal(received, SIG_DFL)
+    raise(received)
+}
 
 enum CrashLog {
 
@@ -24,20 +42,14 @@ enum CrashLog {
 
     /// Install the handlers. Call once, as early as possible.
     static func install() {
-        NSSetUncaughtExceptionHandler { exception in
-            record("exception \(exception.name.rawValue) — \(exception.reason ?? "no reason")")
-        }
-
+        NSSetUncaughtExceptionHandler(spektraUncaughtException)
         for sig in [SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP] {
-            signal(sig) { received in
-                record("signal \(received)")
-                signal(received, SIG_DFL)
-                raise(received)
-            }
+            signal(sig, spektraFatalSignal)
         }
     }
 
-    private static func record(_ text: String) {
+    /// Leave the note. Called from a signal handler, so it stays small.
+    static func record(_ text: String) {
         UserDefaults.standard.set(text, forKey: key)
         UserDefaults.standard.synchronize()
     }
