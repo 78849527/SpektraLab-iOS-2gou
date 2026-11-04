@@ -22,7 +22,15 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            Color.black.ignoresSafeArea()
+            LinearGradient(
+                colors: [
+                    Color(red: 0.035, green: 0.041, blue: 0.052),
+                    Color(red: 0.012, green: 0.014, blue: 0.020)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
 
             VStack(spacing: 0) {
                 topBar
@@ -95,9 +103,16 @@ struct ContentView: View {
             }
             .disabled(model.renderedTexture == nil)
         }
+        .font(.subheadline.weight(.semibold))
+        .tint(Color(red: 0.94, green: 0.64, blue: 0.28))
+        .frame(minHeight: 52)
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color(white: 0.06))
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(.white.opacity(0.08))
+                .frame(height: 1)
+        }
     }
 
     // MARK: - the picture
@@ -121,19 +136,73 @@ struct ContentView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "camera.aperture")
-                .font(.system(size: 46, weight: .light))
-                .foregroundStyle(.secondary)
-            Text("选一张 RAW 照片开始")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            Text("81 个波长穿过染料层，颗粒、光晕与成色剂耦合按画幅的微米尺度计算")
+        VStack(spacing: 18) {
+            ZStack {
+                Circle()
+                    .fill(Color(red: 0.94, green: 0.64, blue: 0.28).opacity(0.14))
+                    .frame(width: 92, height: 92)
+
+                Circle()
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    .frame(width: 92, height: 92)
+
+                Image(systemName: "camera.aperture")
+                    .font(.system(size: 40, weight: .light))
+                    .foregroundStyle(Color(red: 0.94, green: 0.64, blue: 0.28))
+            }
+
+            VStack(spacing: 7) {
+                Text("让照片拥有胶片质感")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.primary)
+
+                Text("导入一张 RAW 或普通照片，选择胶片与相纸后即可实时预览。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(3)
+            }
+            .padding(.horizontal, 36)
+
+            PhotosPicker(selection: Binding<PhotosPickerItem?>(
+                get: { pickerItem },
+                set: { newItem in
+                    pickerItem = newItem
+                    if let newItem {
+                        Task<Void, Never>(priority: .userInitiated) { @MainActor in
+                            await model.importPicked(newItem)
+                        }
+                    }
+                }
+            ), matching: .images) {
+                Label("选择照片", systemImage: "photo.badge.plus")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 20)
+                    .frame(minHeight: 44)
+                    .background(
+                        Color(red: 0.94, green: 0.64, blue: 0.28),
+                        in: Capsule()
+                    )
+                    .foregroundStyle(Color.black.opacity(0.82))
+            }
+
+            Text("光谱模拟 · 胶片颗粒 · 光晕与染料层耦合")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
         }
+        .padding(.vertical, 28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            RadialGradient(
+                colors: [
+                    Color(red: 0.94, green: 0.64, blue: 0.28).opacity(0.08),
+                    Color.clear
+                ],
+                center: .center,
+                startRadius: 10,
+                endRadius: 230
+            )
+        )
     }
 
     // MARK: - the controls
@@ -176,26 +245,50 @@ struct ContentView: View {
             // The status line: what happened, and how long it took.
             statusBar
         }
-        .background(Color(white: 0.06))
+        .background(.ultraThinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        }
+        .padding(.horizontal, 8)
+        .padding(.bottom, 8)
     }
 
     private func stockButton(title: String, value: String, systemImage: String,
                              action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 3) {
-                Label(title, systemImage: systemImage)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text(value)
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+            HStack(spacing: 11) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.94, green: 0.64, blue: 0.28))
+                    .frame(width: 34, height: 34)
+                    .background(Color.white.opacity(0.06), in: Circle())
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title.uppercased())
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(value)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+
+                Spacer(minLength: 4)
+
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.tertiary)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
             .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 10))
+            .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.white.opacity(0.07), lineWidth: 1)
+            }
         }
         .buttonStyle(.plain)
     }
