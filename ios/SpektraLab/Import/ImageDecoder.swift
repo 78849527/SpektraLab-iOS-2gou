@@ -90,11 +90,10 @@ enum ImageDecoder {
         // support depends on the format and on the iOS version. For anything
         // that is not RAW this returns nil and the path below runs unchanged.
         if let raw = CIRAWFilter(imageData: data) {
-            // The engine wants linear ProPhoto; the filter hands back the
-            // camera's own primaries with its own tone curve applied. Turning
-            // the boost off keeps the frame closer to what the sensor saw.
-            raw.boostAmount = 0
-            raw.extendedDynamicRangeAmount = 0
+            // Some iOS versions expose these CIRAWFilter properties to Swift
+            // but the runtime implementation does not provide their setters.
+            // Avoid calling them because that raises an Objective-C
+            // unrecognized-selector exception during RAW import.
 
             // Decode at the preview size, not at the sensor size. A 45 MP RAW
             // rendered at full size is a 180 MB CGImage before the engine sees
