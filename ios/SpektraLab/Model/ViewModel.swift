@@ -487,7 +487,11 @@ final class ViewModel: ObservableObject {
                   destinationBytesPerImage: 0)
         blit.endEncoding()
         commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
+        try await withCheckedThrowingContinuation { continuation in
+            commandBuffer.addCompletedHandler { _ in
+                continuation.resume()
+            }
+        }
 
         // 2) Per-pixel RGBA16 uint16 data, now on the CPU (tightly packed).
         //    `contents()` on a shared buffer is non-optional, so there is

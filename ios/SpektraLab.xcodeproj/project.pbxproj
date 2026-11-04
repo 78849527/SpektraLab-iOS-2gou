@@ -17,14 +17,6 @@
 			path = "Canvas";
 			sourceTree = "<group>";
 		};
-		FBC4FB9870C7979DD8A9554C /* Export */ = {
-			isa = PBXGroup;
-			children = (
-
-			);
-			path = "Export";
-			sourceTree = "<group>";
-		};
 		6EDDBE5F289219A80807967D /* ImageDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ImageDecoder.swift"; sourceTree = "<group>"; };
 		CB77A531F6BDF61993E7E131 /* Import */ = {
 			isa = PBXGroup;
@@ -47,12 +39,13 @@
 			path = "Model";
 			sourceTree = "<group>";
 		};
-		DB4A69182F62F25C0AEBC961 /* Resources */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources; sourceTree = "<group>"; };
+		E726C6EED977FC546A55E678 /* CrashLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CrashLog.swift"; sourceTree = "<group>"; };
 		AA0C4AC58357578FABC8BD73 /* EngineBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EngineBridge.swift"; sourceTree = "<group>"; };
 		23E72355523F1F85756E886C /* SpektraLab-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "SpektraLab-Bridging-Header.h"; sourceTree = "<group>"; };
 		291542805F9C50034FBB2D47 /* Service */ = {
 			isa = PBXGroup;
 			children = (
+				E726C6EED977FC546A55E678 /* CrashLog.swift */,
 				AA0C4AC58357578FABC8BD73 /* EngineBridge.swift */,
 				23E72355523F1F85756E886C /* SpektraLab-Bridging-Header.h */
 			);
@@ -68,10 +61,8 @@
 			children = (
 				89E16FC080E6CEAED03F1090 /* Assets.xcassets */,
 				82BC613FBF20D36E130F8DB1 /* Canvas */,
-				FBC4FB9870C7979DD8A9554C /* Export */,
 				CB77A531F6BDF61993E7E131 /* Import */,
 				8DC45243D2F7398E45C0638F /* Model */,
-				DB4A69182F62F25C0AEBC961 /* Resources */,
 				291542805F9C50034FBB2D47 /* Service */,
 				A3683B4388735BD2619A86E7 /* ContentView.swift */,
 				AC1103EAAEEF5ACAFDF57005 /* Info.plist */,
@@ -85,13 +76,17 @@
 		3FB61168A9125B61D6CA5945 /* build-ipa.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "build-ipa.sh"; sourceTree = "<group>"; };
 		A2A89600EE841D5DABCD4BB1 /* check-engine-resources.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "check-engine-resources.sh"; sourceTree = "<group>"; };
 		D9DFA21EE15AC0B57DCC3ECE /* gen-project.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = "gen-project.py"; sourceTree = "<group>"; };
+		50DE505D8330336C94243C47 /* pack-engine-assets.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = "pack-engine-assets.py"; sourceTree = "<group>"; };
+		011BBF60487D2E910909EE56 /* repack-ipa.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = "repack-ipa.py"; sourceTree = "<group>"; };
 		B023CA8F0F68491740229B47 /* Tools */ = {
 			isa = PBXGroup;
 			children = (
 				B6A419F00D4200B36D185B52 /* build-engine.sh */,
 				3FB61168A9125B61D6CA5945 /* build-ipa.sh */,
 				A2A89600EE841D5DABCD4BB1 /* check-engine-resources.sh */,
-				D9DFA21EE15AC0B57DCC3ECE /* gen-project.py */
+				D9DFA21EE15AC0B57DCC3ECE /* gen-project.py */,
+				50DE505D8330336C94243C47 /* pack-engine-assets.py */,
+				011BBF60487D2E910909EE56 /* repack-ipa.py */
 			);
 			path = "Tools";
 			sourceTree = "<group>";
@@ -119,7 +114,6 @@
 		53191FE53439828D563A49E1 /* overscan.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = "overscan.cpp"; path = "../engine/src/pipeline/overscan.cpp"; sourceTree = SOURCE_ROOT; };
 		B888295F065E412DBD53AA9F /* pipeline.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = "pipeline.cpp"; path = "../engine/src/pipeline/pipeline.cpp"; sourceTree = SOURCE_ROOT; };
 		3BAED9092498C52D907E7A39 /* scene_latitude.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = "scene_latitude.cpp"; path = "../engine/src/pipeline/scene_latitude.cpp"; sourceTree = SOURCE_ROOT; };
-		EA86609D2614085B3F08904D /* view_process.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; name = "view_process.cpp"; path = "../engine/src/pipeline/view_process.cpp"; sourceTree = SOURCE_ROOT; };
 		6E206BF4A16CC067140F0164 /* Engine */ = {
 			isa = PBXGroup;
 			children = (
@@ -145,8 +139,7 @@
 				9E027A774C64685E49E698E3 /* engine.cpp */,
 				53191FE53439828D563A49E1 /* overscan.cpp */,
 				B888295F065E412DBD53AA9F /* pipeline.cpp */,
-				3BAED9092498C52D907E7A39 /* scene_latitude.cpp */,
-				EA86609D2614085B3F08904D /* view_process.cpp */
+				3BAED9092498C52D907E7A39 /* scene_latitude.cpp */
 			);
 			name = Engine;
 			sourceTree = "<group>";
@@ -176,6 +169,7 @@
 		430B96D64212D930E62FE531 /* Params.swift */ = {isa = PBXBuildFile; fileRef = 43640C977325C2A4780BCB22; };
 		0809FAE36475416270825347 /* StockCatalog.swift */ = {isa = PBXBuildFile; fileRef = A0F5CBF24A66860B5C20C953; };
 		7D24DC526060AE0B2A1B358B /* ViewModel.swift */ = {isa = PBXBuildFile; fileRef = F508BA6EFDF4E702F586E928; };
+		1492D358FF14C4E199F4C8A5 /* CrashLog.swift */ = {isa = PBXBuildFile; fileRef = E726C6EED977FC546A55E678; };
 		1D7CAE44F4E76C8675A0BC89 /* EngineBridge.swift */ = {isa = PBXBuildFile; fileRef = AA0C4AC58357578FABC8BD73; };
 		D7CF82BAD4EE3CBADCB7819F /* ContentView.swift */ = {isa = PBXBuildFile; fileRef = A3683B4388735BD2619A86E7; };
 		6DAB5C398E84F20BCC7A4763 /* SpektraLabApp.swift */ = {isa = PBXBuildFile; fileRef = 7AE53F13A98BF43AA65EEE82; };
@@ -202,7 +196,6 @@
 		BC81EA2C9F6F95BEBD718484 /* overscan.cpp */ = {isa = PBXBuildFile; fileRef = 53191FE53439828D563A49E1; };
 		DAA8FA6D996D1D35D30987D2 /* pipeline.cpp */ = {isa = PBXBuildFile; fileRef = B888295F065E412DBD53AA9F; };
 		645E76897F68248CC338705C /* scene_latitude.cpp */ = {isa = PBXBuildFile; fileRef = 3BAED9092498C52D907E7A39; };
-		7C7A6E839F59F7A2FAAB6095 /* view_process.cpp */ = {isa = PBXBuildFile; fileRef = EA86609D2614085B3F08904D; };
 		AB6F1305312B9996E2538FF8 /* app-sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -213,6 +206,7 @@
 				430B96D64212D930E62FE531 /* Params.swift */,
 				0809FAE36475416270825347 /* StockCatalog.swift */,
 				7D24DC526060AE0B2A1B358B /* ViewModel.swift */,
+				1492D358FF14C4E199F4C8A5 /* CrashLog.swift */,
 				1D7CAE44F4E76C8675A0BC89 /* EngineBridge.swift */,
 				D7CF82BAD4EE3CBADCB7819F /* ContentView.swift */,
 				6DAB5C398E84F20BCC7A4763 /* SpektraLabApp.swift */,
@@ -238,19 +232,16 @@
 				365D0941D6889615D22D4B7A /* engine.cpp */,
 				BC81EA2C9F6F95BEBD718484 /* overscan.cpp */,
 				DAA8FA6D996D1D35D30987D2 /* pipeline.cpp */,
-				645E76897F68248CC338705C /* scene_latitude.cpp */,
-				7C7A6E839F59F7A2FAAB6095 /* view_process.cpp */
+				645E76897F68248CC338705C /* scene_latitude.cpp */
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		B663863AD126A4768BAE9A7F /* Assets.xcassets */ = {isa = PBXBuildFile; fileRef = 89E16FC080E6CEAED03F1090; };
-		BCE0E263206CC549F761CF84 /* Resources */ = {isa = PBXBuildFile; fileRef = DB4A69182F62F25C0AEBC961; };
 		C831EECBAB01524E02C71B42 /* app-resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B663863AD126A4768BAE9A7F /* Assets.xcassets */,
-				BCE0E263206CC549F761CF84 /* Resources */
+				B663863AD126A4768BAE9A7F /* Assets.xcassets */
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -279,6 +270,7 @@
 		967DE5DAE8F9C3546488D3FD /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
 				CLANG_CXX_LIBRARY = "libc++";
@@ -303,6 +295,7 @@
 					"$(SRCROOT)/../engine/src/core",
 					"$(SRCROOT)/../engine/third_party/metal-cpp",
 				);
+				INFOPLIST_ENABLE_CFBUNDLEICONS_MERGE = NO;
 				INFOPLIST_FILE = SpektraLab/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
@@ -322,13 +315,14 @@
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = "1";
 			};
 			name = Debug;
 		};
 		70A5F3AAC43D0790B57ED51A /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_CXX_LANGUAGE_STANDARD = "c++20";
 				CLANG_CXX_LIBRARY = "libc++";
@@ -350,6 +344,7 @@
 					"$(SRCROOT)/../engine/src/core",
 					"$(SRCROOT)/../engine/third_party/metal-cpp",
 				);
+				INFOPLIST_ENABLE_CFBUNDLEICONS_MERGE = NO;
 				INFOPLIST_FILE = SpektraLab/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
@@ -369,7 +364,7 @@
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_STRICT_CONCURRENCY = complete;
 				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = "1";
 			};
 			name = Release;
 		};
