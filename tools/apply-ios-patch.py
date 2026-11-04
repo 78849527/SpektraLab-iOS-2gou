@@ -41,9 +41,17 @@ from pathlib import Path
 # (label, old, new, expected_hits)
 CHANGES: list[tuple[str, str, str, int]] = []
 
+# Patches for a second file; `main` applies both groups.
+ENGINE_FILE = "src/pipeline/engine.cpp"
+ENGINE_CHANGES: list[tuple[str, str, str, int]] = []
+
 
 def change(label: str, old: str, new: str, expected: int = 1) -> None:
     CHANGES.append((label, old, new, expected))
+
+
+def engine_change(label: str, old: str, new: str, expected: int = 1) -> None:
+    ENGINE_CHANGES.append((label, old, new, expected))
 
 
 FILE = "src/gpu/metal_gpu.cpp"
@@ -235,9 +243,86 @@ change(
 )
 
 
-def main() -> None:
-    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("engine")
-    path = root / FILE
+# --- 4. the C boundary ------------------------------------------------------
+#
+# A C++ exception crossing an `extern "C"` boundary calls `std::terminate`,
+# which `abort()`s. `engine.cpp` exports 28 `spk_*` functions and never catches
+# anything, so any throw from the pipeline -- `bad_alloc` on a large frame,
+# `out_of_range` from a malformed profile -- kills the app with SIGABRT
+# (signal 6) instead of returning an error the UI can show.
+#
+# These four are what the import and render paths call. The message is fixed
+# rather than `e.what()` so the patch needs no `<exception>` include.
+
+engine_change(
+    "spk_open guard",
+    """    frame.channels = input->channels;
+    return open_frame(engine, frame, params_delta_json, out_json);
+}
+
+spk_session* spk_open_device""",
+    """    frame.channels = input->channels;
+    try {
+        return open_frame(engine, frame, params_delta_json, out_json);
+    } catch (...) {
+        g_error = "spk_open: a C++ exception escaped the engine";
+    }
+    return nullptr;
+}
+
+spk_session* spk_open_device""",
+)
+
+engine_change(
+    "spk_open_device guard",
+    """    frame.channels = input->channels;
+    return open_frame(engine, frame, params_delta_json, out_json);
+}
+
+namespace {""",
+    """    frame.channels = input->channels;
+    try {
+        return open_frame(engine, frame, params_delta_json, out_json);
+    } catch (...) {
+        g_error = "spk_open_device: a C++ exception escaped the engine";
+    }
+    return nullptr;
+}
+
+namespace {""",
+)
+
+engine_change(
+    "spk_render / spk_reprint guard",
+    """spk_status spk_reprint(spk_session* session, const char* tier, spk_result* out) {
+    return render_tier(session, tier, /*use_reprint=*/true, out);
+}
+
+spk_status spk_render(spk_session* session, const char* tier, spk_result* out) {
+    return render_tier(session, tier, /*use_reprint=*/false, out);
+}""",
+    """spk_status spk_reprint(spk_session* session, const char* tier, spk_result* out) {
+    try {
+        return render_tier(session, tier, /*use_reprint=*/true, out);
+    } catch (...) {
+        g_error = "spk_reprint: a C++ exception escaped the engine";
+    }
+    return SPK_ERR_GPU;
+}
+
+spk_status spk_render(spk_session* session, const char* tier, spk_result* out) {
+    try {
+        return render_tier(session, tier, /*use_reprint=*/false, out);
+    } catch (...) {
+        g_error = "spk_render: a C++ exception escaped the engine";
+    }
+    return SPK_ERR_GPU;
+}""",
+)
+
+
+def apply_group(root: Path, rel: str, changes: list[tuple[str, str, str, int]]) -> None:
+    path = root / rel
     if not path.exists():
         print(f"missing: {path}")
         sys.exit(1)
@@ -246,7 +331,7 @@ def main() -> None:
     # Every change is checked against the *original* text first, so one
     # change cannot invalidate the anchor of the next.
     staged = text
-    for label, old, new, expected in CHANGES:
+    for label, old, new, expected in changes:
         hits = text.count(old)
         if hits != expected:
             print(f"FAILED: {label}: expected {expected} hit(s), found {hits}")
@@ -263,6 +348,12 @@ def main() -> None:
 
     path.write_text(staged, encoding="utf-8")
     print(f"patched {path}")
+
+
+def main() -> None:
+    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("engine")
+    apply_group(root, FILE, CHANGES)
+    apply_group(root, ENGINE_FILE, ENGINE_CHANGES)
 
 
 if __name__ == "__main__":
