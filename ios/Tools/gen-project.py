@@ -248,7 +248,9 @@ def build() -> str:
         "SWIFT_STRICT_CONCURRENCY": "complete",
         "IPHONEOS_DEPLOYMENT_TARGET": IOS_MIN,
         "SDKROOT": "iphoneos",
-        "TARGETED_DEVICE_FAMILY": '"1,2"',
+        # iPhone only, matching the build that installs. `TARGETED_DEVICE_FAMILY`
+        # writes UIDeviceFamily into Info.plist and would otherwise override it.
+        "TARGETED_DEVICE_FAMILY": '"1"',
         # Manual for both cases. Automatic signing needs a DEVELOPMENT_TEAM
         # and an Apple account to choose a certificate; a CI runner with no
         # signing secrets has neither, and `xcodebuild archive` then fails

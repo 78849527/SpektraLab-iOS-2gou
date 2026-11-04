@@ -179,6 +179,19 @@ jobs:
       # The project file is generated from the filesystem, like the upstream
       # macOS project generates its own. Generating it here means the CI
       # builds what is on disk rather than what was committed.
+      # `CFBundleIconFiles` names `AppIcon60x60`, and iOS looks that up as
+      # `AppIcon60x60@2x.png` / `@3x.png` in the bundle root. The working
+      # third-party build ships exactly these two files, so the icon does not
+      # depend on actool's CFBundleIcons surviving the Info.plist merge (it
+      # does not -- builtin-linkAssetCatalog rewrites that dictionary).
+      - name: Stage the icon PNGs
+        run: |
+          set -euo pipefail
+          set_src=ios/SpektraLab/Assets.xcassets/AppIcon.appiconset
+          cp "$set_src/icon-60@2x.png" ios/SpektraLab/AppIcon60x60@2x.png
+          cp "$set_src/icon-60@3x.png" ios/SpektraLab/AppIcon60x60@3x.png
+          ls -l ios/SpektraLab/AppIcon60x60@*.png
+
       - name: Generate the Xcode project
         run: python3 ios/Tools/gen-project.py
       # --- signing ---------------------------------------------------------
