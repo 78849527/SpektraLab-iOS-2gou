@@ -90,28 +90,11 @@ enum ImageDecoder {
         // support depends on the format and on the iOS version. For anything
         // that is not RAW this returns nil and the path below runs unchanged.
         if let raw = CIRAWFilter(imageData: data) {
-            // Some iOS versions expose these CIRAWFilter properties to Swift
-            // but the runtime implementation does not provide their setters.
-            // Avoid calling them because that raises an Objective-C
-            // unrecognized-selector exception during RAW import.
-
-            // Decode at the preview size, not at the sensor size. A 45 MP RAW
-            // rendered at full size is a 180 MB CGImage before the engine sees
-            // a pixel, and with the RGBA buffer and the float32 output on top
-            // the peak is past 300 MB -- enough for iOS to kill the app right
-            // after import. `scaleFactor` makes the filter do the downscale
-            // during the decode instead.
-            // `nativeSize` is the sensor size, but a filter that reports zero
-            // there would skip the downscale entirely and decode at full
-            // size -- which is the case that exhausts memory. Fall back to the
-            // output extent before giving up on scaling.
-            var longest = max(raw.nativeSize.width, raw.nativeSize.height)
-            if longest <= 0, let probe = raw.outputImage {
-                longest = max(probe.extent.width, probe.extent.height)
-            }
-            if let maxLongEdge, longest > 0 {
-                raw.scaleFactor = min(1, Float(Double(maxLongEdge) / Double(longest)))
-            }
+            // Some iOS versions expose CIRAWFilter's tunable properties
+            // (`scaleFactor` among them) to Swift without implementing their
+            // setters. Touching them raises an Objective-C
+            // unrecognized-selector exception during RAW import, so leave the
+            // filter untouched -- `decode(cgImage:)` applies `maxLongEdge`.
 
             // The intermediate CGImage is the other big allocation; releasing
             // it before the float conversion keeps the peak lower.
