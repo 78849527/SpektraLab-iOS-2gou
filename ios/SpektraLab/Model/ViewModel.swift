@@ -108,6 +108,7 @@ final class ViewModel: ObservableObject {
             self.renderer = CanvasRenderer(device: device)
             state = .empty
             statusText = "就绪 · \(catalog.films.count) 款胶片 · \(catalog.papers.count) 款相纸"
+            reportPreviousCrash()
         } catch {
             // The CI build does not ship the resource archive inside the .app:
             // a 15 MB payload makes the side-loading installer fail when it
@@ -134,10 +135,19 @@ final class ViewModel: ObservableObject {
             self.renderer = CanvasRenderer(device: device)
             state = .empty
             statusText = "就绪 · \(catalog.films.count) 款胶片 · \(catalog.papers.count) 款相纸"
+            reportPreviousCrash()
         } catch {
             state = .failed(error.localizedDescription)
             statusText = "资源准备失败"
         }
+    }
+
+    /// Puts the previous run's crash on screen, so it does not take another
+    /// cycle of "it just closes" to find out what happened.
+    private func reportPreviousCrash() {
+        guard let crash = CrashLog.take() else { return }
+        state = .failed("上次异常退出：\(crash)")
+        statusText = "上次异常退出 · \(crash)"
     }
 
     // MARK: - importing

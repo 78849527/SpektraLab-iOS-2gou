@@ -102,16 +102,25 @@ enum ImageDecoder {
             // the peak is past 300 MB -- enough for iOS to kill the app right
             // after import. `scaleFactor` makes the filter do the downscale
             // during the decode instead.
-            if let maxLongEdge {
-                let native = raw.nativeSize
-                let longest = max(native.width, native.height)
-                if longest > 0 {
-                    raw.scaleFactor = min(1, Float(Double(maxLongEdge) / Double(longest)))
-                }
+            // `nativeSize` is the sensor size, but a filter that reports zero
+            // there would skip the downscale entirely and decode at full
+            // size -- which is the case that exhausts memory. Fall back to the
+            // output extent before giving up on scaling.
+            var longest = max(raw.nativeSize.width, raw.nativeSize.height)
+            if longest <= 0, let probe = raw.outputImage {
+                longest = max(probe.extent.width, probe.extent.height)
+            }
+            if let maxLongEdge, longest > 0 {
+                raw.scaleFactor = min(1, Float(Double(maxLongEdge) / Double(longest)))
             }
 
-            if let output = raw.outputImage,
-               let rendered = CIContext().createCGImage(output, from: output.extent) {
+            // The intermediate CGImage is the other big allocation; releasing
+            // it before the float conversion keeps the peak lower.
+            let rendered = autoreleasepool { () -> CGImage? in
+                guard let output = raw.outputImage else { return nil }
+                return CIContext().createCGImage(output, from: output.extent)
+            }
+            if let rendered {
                 return try decode(cgImage: rendered, maxLongEdge: maxLongEdge)
             }
         }
