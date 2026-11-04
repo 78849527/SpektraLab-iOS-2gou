@@ -92,7 +92,12 @@ enum ImageDecoder {
     ///
     /// - Parameter maxLongEdge: the long edge to scale to, or `nil` for no
     ///   scaling (the export path).
-    static func decode(data: Data, maxLongEdge: Int?) throws -> DecodedFrame {
+    /// - Parameter enforcePixelLimit: when `true`, frames larger than
+    ///   `maxPixels` are refused to protect the interactive preview. The
+    ///   export path passes `false` — the user asked for the original
+    ///   resolution, so a 48 MP RAW must decode rather than be rejected by a
+    ///   limit meant for the 2048 px preview.
+    static func decode(data: Data, maxLongEdge: Int?, enforcePixelLimit: Bool = true) throws -> DecodedFrame {
         // RAW first. `CIRAWFilter` is what the macOS app uses, and it covers
         // far more camera formats than ImageIO's `CGImageSource`, whose RAW
         // support depends on the format and on the iOS version. For anything
@@ -126,7 +131,8 @@ enum ImageDecoder {
                 return CIContext().createCGImage(output, from: extent)
             }
             if let rendered {
-                return try decode(cgImage: rendered, maxLongEdge: maxLongEdge)
+                return try decode(cgImage: rendered, maxLongEdge: maxLongEdge,
+                                  enforcePixelLimit: enforcePixelLimit)
             }
             // The RAW filter opened but would not render. Do not fall through
             // to `CGImageSource`, which decodes the *embedded preview* (a
@@ -139,7 +145,8 @@ enum ImageDecoder {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
             throw DecodeError.unreadable("not an image this system recognises")
         }
-        return try decode(source: source, maxLongEdge: maxLongEdge)
+        return try decode(source: source, maxLongEdge: maxLongEdge,
+                          enforcePixelLimit: enforcePixelLimit)
     }
 
     /// Decode an image from a file URL.
@@ -156,7 +163,8 @@ enum ImageDecoder {
     }
 
     /// Decode from a `CGImageSource`.
-    static func decode(source: CGImageSource, maxLongEdge: Int?) throws -> DecodedFrame {
+    static func decode(source: CGImageSource, maxLongEdge: Int?,
+                       enforcePixelLimit: Bool = true) throws -> DecodedFrame {
         let type = CGImageSourceGetType(source) as String?
         guard let image = decodeImage(source: source, maxLongEdge: maxLongEdge) else {
             if let type {
@@ -164,13 +172,14 @@ enum ImageDecoder {
             }
             throw DecodeError.emptyImage
         }
-        return try pixels(from: image)
+        return try pixels(from: image, enforcePixelLimit: enforcePixelLimit)
     }
 
     /// Decode from a `CGImage`.
-    static func decode(cgImage: CGImage, maxLongEdge: Int?) throws -> DecodedFrame {
+    static func decode(cgImage: CGImage, maxLongEdge: Int?,
+                       enforcePixelLimit: Bool = true) throws -> DecodedFrame {
         let scaled = maxLongEdge.map { scale(image: cgImage, longEdge: $0) } ?? cgImage
-        return try pixels(from: scaled)
+        return try pixels(from: scaled, enforcePixelLimit: enforcePixelLimit)
     }
 
     // MARK: - the decode itself
@@ -238,11 +247,16 @@ enum ImageDecoder {
     /// The matrix is the standard sRGB → ProPhoto RGB conversion, computed
     /// for D50 (both spaces are D50-referred) and normalised so that white
     /// maps to white.
-    private static func pixels(from image: CGImage) throws -> DecodedFrame {
+    private static func pixels(from image: CGImage, enforcePixelLimit: Bool = true) throws -> DecodedFrame {
         let width = image.width
         let height = image.height
         guard width > 0, height > 0 else { throw DecodeError.emptyImage }
-        guard width * height <= maxPixels else {
+        // The 24 MP ceiling protects the *interactive preview*, where a big
+        // decode buys nothing (the live tier renders at 2048 px) and the
+        // extra float32 buffers risk a jetsam kill. The export path opts out:
+        // the user asked for the original resolution, and the engine renders
+        // a 48 MP frame fine — only the export pays the larger peak.
+        if enforcePixelLimit, width * height > maxPixels {
             throw DecodeError.outOfMemory(pixels: width * height)
         }
 
@@ -268,26 +282,31 @@ enum ImageDecoder {
         let count = width * height
         var out = [Float](repeating: 0, count: count * 3)
 
-        // Step 1: sRGB → linear, in place on a copy of the 8-bit data.
-        var linear = [Float](repeating: 0, count: count * 4)
+        // Step 1: sRGB → linear. The alpha channel is written by the draw but
+        // never used, so the linear buffer holds three channels, not four —
+        // for a 48 MP export that is 585 MB instead of 780 MB, which is the
+        // difference between finishing and a jetsam kill. The 8-bit `buffer`
+        // is released right after this pass.
+        var linear = [Float](repeating: 0, count: count * 3)
         buffer.withUnsafeBytes { raw in
             let src = raw.bindMemory(to: UInt8.self)
             linear.withUnsafeMutableBufferPointer { dst in
                 for i in 0..<count {
-                    dst[i * 4 + 0] = srgbToLinear(Float(src[i * 4 + 0]) / 255)
-                    dst[i * 4 + 1] = srgbToLinear(Float(src[i * 4 + 1]) / 255)
-                    dst[i * 4 + 2] = srgbToLinear(Float(src[i * 4 + 2]) / 255)
-                    dst[i * 4 + 3] = 1
+                    dst[i * 3 + 0] = srgbToLinear(Float(src[i * 4 + 0]) / 255)
+                    dst[i * 3 + 1] = srgbToLinear(Float(src[i * 4 + 1]) / 255)
+                    dst[i * 3 + 2] = srgbToLinear(Float(src[i * 4 + 2]) / 255)
                 }
             }
         }
+        // The 8-bit staging buffer (195 MB at 48 MP) is no longer needed.
+        buffer.removeAll(keepingCapacity: false)
 
         // Step 2: linear sRGB → linear ProPhoto.
         let m = srgbToProPhotoLinear
         linear.withUnsafeBufferPointer { src in
             out.withUnsafeMutableBufferPointer { dst in
                 for i in 0..<count {
-                    let r = src[i * 4 + 0], g = src[i * 4 + 1], b = src[i * 4 + 2]
+                    let r = src[i * 3 + 0], g = src[i * 3 + 1], b = src[i * 3 + 2]
                     dst[i * 3 + 0] = m[0] * r + m[1] * g + m[2] * b
                     dst[i * 3 + 1] = m[3] * r + m[4] * g + m[5] * b
                     dst[i * 3 + 2] = m[6] * r + m[7] * g + m[8] * b

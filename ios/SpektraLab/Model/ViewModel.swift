@@ -373,7 +373,11 @@ final class ViewModel: ObservableObject {
             // Re-decode at full size, from the same bytes that imported
             // successfully — never re-request them from the picker, whose
             // `loadTransferable` may return a different representation.
-            let full = try ImageDecoder.decode(data: data, maxLongEdge: nil)
+            // `enforcePixelLimit: false`: the user asked for the original
+            // resolution, so a 48 MP RAW must decode rather than be rejected
+            // by the 24 MP limit meant for the preview.
+            let full = try ImageDecoder.decode(data: data, maxLongEdge: nil,
+                                               enforcePixelLimit: false)
 
             // Reopen on the full frame, with the same stocks and parameters.
             var delta = ParamDefaults.delta(film: filmStock, paper: printStock)
