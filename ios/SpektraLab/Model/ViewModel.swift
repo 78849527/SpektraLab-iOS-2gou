@@ -64,6 +64,15 @@ final class ViewModel: ObservableObject {
 
     /// The picked photo, kept so it can be re-decoded at full size for export.
     private var pickedItem: PhotosPickerItem?
+    /// The original bytes of the picked photo, kept for export.
+    ///
+    /// `PhotosPickerItem.loadTransferable` does not guarantee it returns the
+    /// same bytes on every call — for a RAW it may hand back the raw sensor
+    /// data the first time and a transcoded image the second. Re-loading for
+    /// export is what made a photo that previewed fine fail the full-size
+    /// decode. Keep the bytes from the import, where they already decoded
+    /// once, and reuse them.
+    private var pickedData: Data?
     private var pickedImage: UIImage?
 
     /// The decoded frame in the engine's input space.
@@ -163,6 +172,10 @@ final class ViewModel: ObservableObject {
             guard let data = try await item.loadTransferable(type: PickedImageData.self)?.data else {
                 throw DecodeError.unreadable("照片没有返回数据")
             }
+            // Keep the bytes that already decoded once, so export does not
+            // re-request them and get a different (possibly undecodable)
+            // representation back.
+            pickedData = data
             // The preview decode is small: the live tier renders at 2048 px on
             // the long edge, so a bigger decode buys nothing and costs
             // seconds and hundreds of megabytes.
@@ -345,7 +358,11 @@ final class ViewModel: ObservableObject {
     /// from the original file rather than the preview, so the exported file
     /// is as large as the photo was.
     func exportToPhotos() async {
-        guard let engine, let pickedItem else {
+        guard let engine else {
+            statusText = "引擎没有启动"
+            return
+        }
+        guard let data = pickedData else {
             statusText = "还没有可导出的照片"
             return
         }
@@ -353,10 +370,9 @@ final class ViewModel: ObservableObject {
         statusText = "正在导出原始分辨率…"
 
         do {
-            // Re-decode at full size.
-            guard let data = try await pickedItem.loadTransferable(type: PickedImageData.self)?.data else {
-                throw DecodeError.unreadable("照片没有返回数据")
-            }
+            // Re-decode at full size, from the same bytes that imported
+            // successfully — never re-request them from the picker, whose
+            // `loadTransferable` may return a different representation.
             let full = try ImageDecoder.decode(data: data, maxLongEdge: nil)
 
             // Reopen on the full frame, with the same stocks and parameters.
@@ -524,11 +540,12 @@ enum PhotoLibrary {
     }
 }
 
-enum ExportError: Error, CustomStringConvertible {
+enum ExportError: Error, CustomStringConvertible, LocalizedError {
     case permissionDenied
     var description: String {
         switch self {
         case .permissionDenied: "没有相册写入权限，请在系统设置里允许"
         }
     }
+    var errorDescription: String? { description }
 }

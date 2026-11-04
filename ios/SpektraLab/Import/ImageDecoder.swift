@@ -42,7 +42,13 @@ struct DecodedFrame {
 }
 
 /// Why a frame could not be decoded.
-enum DecodeError: Error, CustomStringConvertible {
+///
+/// Implements `LocalizedError` (not just `CustomStringConvertible`), because
+/// the ViewModel surfaces `error.localizedDescription`. Without it, a thrown
+/// `DecodeError` bridges to `NSError` and `localizedDescription` returns the
+/// useless "The operation couldn't be completed. (SpektraLab.DecodeError
+/// error 2.)" — the real reason ("the image is empty") is thrown away.
+enum DecodeError: Error, CustomStringConvertible, LocalizedError {
     case unreadable(String)
     case unsupportedFormat(String)
     case emptyImage
@@ -50,12 +56,14 @@ enum DecodeError: Error, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case .unreadable(let why): "the image could not be read: \(why)"
-        case .unsupportedFormat(let what): "this format cannot be decoded on iOS: \(what)"
-        case .emptyImage: "the image is empty"
-        case .outOfMemory(let px): "this frame is \(px) pixels, too large to decode on a phone"
+        case .unreadable(let why): "照片无法读取：\(why)"
+        case .unsupportedFormat(let what): "这种格式在 iOS 上无法解码：\(what)"
+        case .emptyImage: "图像为空或已损坏"
+        case .outOfMemory(let px): "这张照片有 \(px) 像素，手机上内存不足以解码"
         }
     }
+
+    var errorDescription: String? { description }
 }
 
 /// Decodes images into the engine's input space.
@@ -100,11 +108,32 @@ enum ImageDecoder {
             // it before the float conversion keeps the peak lower.
             let rendered = autoreleasepool { () -> CGImage? in
                 guard let output = raw.outputImage else { return nil }
-                return CIContext().createCGImage(output, from: output.extent)
+                var extent = output.extent
+                // A RAW's output extent is frequently `.infinite` (the filter
+                // has no finite output bounds until something asks for a
+                // pixel), and rendering from an infinite extent fails. Clamp
+                // to the filter's own native size first; if that is unknown,
+                // crop to the image's finite bounds when Core Image can give
+                // one.
+                if extent.width.isInfinite || extent.height.isInfinite {
+                    let w = raw.nativeSize.width, h = raw.nativeSize.height
+                    if w > 0 && h > 0 {
+                        extent = CGRect(x: 0, y: 0, width: w, height: h)
+                    } else {
+                        return nil
+                    }
+                }
+                return CIContext().createCGImage(output, from: extent)
             }
             if let rendered {
                 return try decode(cgImage: rendered, maxLongEdge: maxLongEdge)
             }
+            // The RAW filter opened but would not render. Do not fall through
+            // to `CGImageSource`, which decodes the *embedded preview* (a
+            // downsampled JPEG, not the sensor data) at full size and, for
+            // many RAW containers, returns nothing — surfacing the useless
+            // "empty image" downstream. Report the real failure instead.
+            throw DecodeError.unreadable("RAW 解码失败（CIRAWFilter 无法渲染此文件）")
         }
 
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
