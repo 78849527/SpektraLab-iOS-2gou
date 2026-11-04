@@ -251,25 +251,43 @@ final class ViewModel: ObservableObject {
             return
         }
         let image = UIImage(cgImage: cg, scale: 1, orientation: .up)
+        guard let jpeg = image.jpegData(compressionQuality: 0.95) else {
+            state = .failed("导出失败：无法编码图像")
+            return
+        }
 
         do {
-            let permission = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-            guard permission == .authorized || permission == .limited else {
-                throw LookError.permission
-            }
-            try await PHPhotoLibrary.shared().performChanges {
-                PHAssetChangeRequest.creationRequestForAsset(from: image)
-            }
+            try await Self.saveToLibrary(jpeg)
             state = .ready
             statusText = "已保存到相册 · \(Int(source.extent.width))×\(Int(source.extent.height))"
         } catch {
             state = .failed("导出失败：\(error.localizedDescription)")
         }
     }
+
+    /// The write is done outside the main actor's isolation domain.
+    ///
+    /// Swift 6 will not send a `() -> Void` closure formed inside a
+    /// `@MainActor` context into Photos' `performChanges`: a closure that
+    /// captures an actor-isolated `UIImage` is not `Sendable`, and the
+    /// diagnostic is "sending value of non-Sendable type '() -> Void' risks
+    /// causing data races". Encoding to `Data` makes the captured value
+    /// `Sendable`, and building the closure in a `nonisolated` function means
+    /// there is no actor boundary to send it across in the first place.
+    private nonisolated static func saveToLibrary(_ data: Data) async throws {
+        let permission = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+        guard permission == .authorized || permission == .limited else {
+            throw LookError.permission
+        }
+        try await PHPhotoLibrary.shared().performChanges { @Sendable in
+            let request = PHAssetCreationRequest.forAsset()
+            request.addResource(with: .photo, data: data, options: nil)
+        }
+    }
 }
 
 /// Errors that a person can act on. Every one is a sentence, not a code.
-enum LookError: LocalizedError {
+enum LookError: LocalizedError, Sendable {
     case unreadable
     case permission
     case noImage
