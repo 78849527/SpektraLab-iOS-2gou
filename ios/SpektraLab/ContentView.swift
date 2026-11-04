@@ -74,7 +74,7 @@ struct ContentView: View {
                 Image(systemName: "photo.on.rectangle")
                     .font(.system(size: 16, weight: .semibold))
                     .frame(width: 38, height: 38)
-                    .background(Color.white.opacity(0.07), in: Circle())
+                    .glassEffect(.regular, in: Circle())
             }
             Spacer()
             VStack(spacing: 2) {
@@ -94,7 +94,7 @@ struct ContentView: View {
                 Image(systemName: "square.and.arrow.up")
                     .font(.system(size: 16, weight: .semibold))
                     .frame(width: 38, height: 38)
-                    .background(Color.white.opacity(0.07), in: Circle())
+                    .glassEffect(.regular, in: Circle())
             }
             .disabled(model.renderedTexture == nil)
             .opacity(model.renderedTexture == nil ? 0.4 : 1)
@@ -180,11 +180,7 @@ struct ContentView: View {
                             .foregroundStyle(deck == tab ? Color.labCream : Color.secondary)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 7)
-                            .background(deck == tab ? Color.white.opacity(0.14) : Color.clear,
-                                        in: Capsule())
-                            .overlay {
-                                Capsule().stroke(Color.white.opacity(0.10), lineWidth: 1)
-                            }
+                            .glassEffect(deck == tab ? .regular : .clear, in: Capsule())
                     }
                     .buttonStyle(.plain)
                 }
@@ -203,12 +199,7 @@ struct ContentView: View {
 
             statusBar
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-        }
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .padding(.horizontal, 10)
         .padding(.bottom, 10)
     }

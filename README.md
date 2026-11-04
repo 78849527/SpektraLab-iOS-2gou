@@ -102,6 +102,7 @@ IPA 不能直接双击安装。三种办法：
 
 ## 已知限制
 
+- **最低系统 iOS 27.0**，界面使用系统原生 Liquid Glass。
 - **RAW 解码依赖 Core Image / ImageIO**，不是 LibRaw。选择照片时优先读取原始 RAW 字节；解码时把 Core Image RAW 输出固定到 sRGB 后再进入引擎的线性 ProPhoto 输入空间。支持随 iOS 版本和机型变化的 ARW / Apple RAW / DNG 等格式，解不了的格式会明确报错，不会悄悄渲错。
 - **导入按长边 3072 px 缩放**。引擎的 live 档渲染上限是长边 2048 px，预览用不着更大的图；而手机内存扛不住 45 MP 的 float32 解码（48 MB 起）。导出时会以原始分辨率重新解码。
 - **导出是 8-bit sRGB JPEG**。无论导入 JPG 还是 RAW，保存到相册前都会明确编码为 JPEG；工作空间是 ProPhoto RGB，导出时转换到 sRGB。

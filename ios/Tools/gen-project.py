@@ -52,7 +52,7 @@ ENGINE = REPO / "engine"
 
 APP = "SpektraLab"
 PRODUCT_NAME = "SpektraLab"
-IOS_MIN = "16.0"
+IOS_MIN = "27.0"
 MARKETING_VERSION = "1.0.0"
 BUILD_NUMBER = "1"
 

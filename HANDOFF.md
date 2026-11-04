@@ -88,7 +88,7 @@ xcodebuild: error: Archive Missing Bundle Identifier
 | 引擎拉取 | `tools/fetch-engine.py`（**必须用 `${{ github.token }}`**，匿名 API 只有 60 次/小时会 403） |
 | 引擎 iOS 补丁 | `tools/apply-ios-patch.py`（拉取后由 CI 应用） |
 | 工程生成 | `ios/Tools/gen-project.py`（CI 每次构建重新生成 pbxproj 与 xcscheme） |
-| 最低系统 | `IOS_MIN = "16.0"`（gen-project.py 里，**不要误用 iOS 17 API**） |
+| 最低系统 | `IOS_MIN = "27.0"`，界面使用系统原生 Liquid Glass |
 | Swift | 6.0 + `SWIFT_STRICT_CONCURRENCY = complete` |
 
 CI 步骤顺序：checkout → fetch engine → check profiles → patch engine → Metal toolchain
