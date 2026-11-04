@@ -251,8 +251,16 @@ change(
 # `out_of_range` from a malformed profile -- kills the app with SIGABRT
 # (signal 6) instead of returning an error the UI can show.
 #
-# These four are what the import and render paths call. The message is fixed
-# rather than `e.what()` so the patch needs no `<exception>` include.
+# These four are what the import and render paths call. Each records
+# `e.what()` so the UI shows the actual cause instead of a generic line;
+# the extra change above adds the `<exception>` include the catch needs.
+
+engine_change(
+    "exception include",
+    "#include <cstring>",
+    "#include <cstring>\n#include <exception>",
+)
+
 
 engine_change(
     "spk_open guard",
@@ -264,8 +272,10 @@ spk_session* spk_open_device""",
     """    frame.channels = input->channels;
     try {
         return open_frame(engine, frame, params_delta_json, out_json);
+    } catch (const std::exception& e) {
+        g_error = std::string("spk_open: ") + e.what();
     } catch (...) {
-        g_error = "spk_open: a C++ exception escaped the engine";
+        g_error = "spk_open: an unknown C++ exception escaped the engine";
     }
     return nullptr;
 }
@@ -283,8 +293,10 @@ namespace {""",
     """    frame.channels = input->channels;
     try {
         return open_frame(engine, frame, params_delta_json, out_json);
+    } catch (const std::exception& e) {
+        g_error = std::string("spk_open_device: ") + e.what();
     } catch (...) {
-        g_error = "spk_open_device: a C++ exception escaped the engine";
+        g_error = "spk_open_device: an unknown C++ exception escaped the engine";
     }
     return nullptr;
 }
@@ -304,8 +316,10 @@ spk_status spk_render(spk_session* session, const char* tier, spk_result* out) {
     """spk_status spk_reprint(spk_session* session, const char* tier, spk_result* out) {
     try {
         return render_tier(session, tier, /*use_reprint=*/true, out);
+    } catch (const std::exception& e) {
+        g_error = std::string("spk_reprint: ") + e.what();
     } catch (...) {
-        g_error = "spk_reprint: a C++ exception escaped the engine";
+        g_error = "spk_reprint: an unknown C++ exception escaped the engine";
     }
     return SPK_ERR_GPU;
 }
@@ -313,8 +327,10 @@ spk_status spk_render(spk_session* session, const char* tier, spk_result* out) {
 spk_status spk_render(spk_session* session, const char* tier, spk_result* out) {
     try {
         return render_tier(session, tier, /*use_reprint=*/false, out);
+    } catch (const std::exception& e) {
+        g_error = std::string("spk_render: ") + e.what();
     } catch (...) {
-        g_error = "spk_render: a C++ exception escaped the engine";
+        g_error = "spk_render: an unknown C++ exception escaped the engine";
     }
     return SPK_ERR_GPU;
 }""",

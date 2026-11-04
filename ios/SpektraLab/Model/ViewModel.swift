@@ -1,37 +1,36 @@
-//  ViewModel.swift — one photo, one look, one preview.
+//  ViewModel.swift — the app's state, and the loop that drives the engine.
 //
-//  Rewritten from the ground up. The old model drove a C++ session: it
-//  downloaded a 15 MB resource archive on first launch, decoded into linear
-//  ProPhoto float32, called `spk_open`, solved the exposure, rendered a Metal
-//  texture, and blitted it back for export. Any one of those steps could put
-//  an error on screen at import time, and the ones that threw across the C
-//  boundary took the process down instead.
+//  One `ObservableObject` holds the whole app: the frame, the stocks, the
+//  parameters, the rendered texture, and the errors. SwiftUI reads it; the
+//  engine is driven from it.
 //
-//  The new model has no engine at all. ImageIO decodes the picked photo at a
-//  bounded size, Core Image grades it, and CIContext makes a UIImage. There
-//  is no network, no profile file, no C++ exception, no texture, and no
-//  colour-space round trip. A photo either decodes or it says plainly why.
-//
-//  Three frames are kept, all lazy `CIImage`s:
-//
-//    * `sourceImage`   — up to 3000 px, for export;
-//    * `previewSource` — up to 1440 px, for the live preview;
-//    * `thumbSource`   — a 168 px centre crop, for the filter strip.
-//
-//  Everything runs on the main actor. `CIImage` is not `Sendable`, and a
-//  preview that fits on a phone screen does not need a background queue.
+//  **The render loop is the interesting part.** A slider drag must not queue
+//  a hundred renders: the engine would work through them all after the finger
+//  is already up, and the user would watch the preview lag behind their own
+//  hand. So a change marks the render *stale*, and a render runs only when
+//  the user stops moving — with one render in flight at a time, and a newer
+//  request replacing an older one rather than queueing behind it.
 
 import Foundation
 import SwiftUI
+import Metal
 import Photos
 import PhotosUI
 import UIKit
-import CoreImage
-import ImageIO
+import UniformTypeIdentifiers
 
 @MainActor
 final class ViewModel: ObservableObject {
 
+    // MARK: - what the app shows
+
+    /// The app's state.
+    ///
+    /// Named `AppState` rather than `State`: inside a SwiftUI view, `State`
+    /// is SwiftUI's own property-wrapper type, and a nested type of the same
+    /// name makes every `.failed` in the file ambiguous -- the compiler
+    /// resolves it to some other `State` in scope and reports a type error
+    /// about a gesture phase, which is nowhere near the problem.
     enum AppState: Equatable {
         case empty
         case importing
@@ -40,263 +39,540 @@ final class ViewModel: ObservableObject {
         case failed(String)
     }
 
-    // MARK: - what the screen shows
-
     @Published private(set) var state: AppState = .empty
-    @Published private(set) var statusText = "导入一张照片，滑动挑选滤镜"
-    @Published private(set) var previewImage: UIImage?
-    @Published private(set) var originalImage: UIImage?
-    @Published private(set) var thumbs: [String: UIImage] = [:]
-    @Published private(set) var sourceDescription = ""
+    @Published private(set) var statusText = ""
+    @Published private(set) var renderedTexture: MTLTexture?
+
+    /// What identifies the current render.
+    ///
+    /// The engine gives every render a progress id, and it is a new string
+    /// each time -- so it is what tells SwiftUI that the picture changed.
+    /// The texture itself cannot: `MTLTexture` is not `Hashable`, and its
+    /// `hashValue` does not exist.
+    @Published private(set) var renderIdentity: String = ""
     @Published private(set) var lastRenderMs: Double = 0
+    @Published private(set) var sourceSize: CGSize = .zero
 
-    @Published var selectedFilterID: String = FilmLook.defaultID
-    @Published var intensity: Double = 1.0
+    /// The parameters, as the sliders hold them.
+    @Published var params: [String: Double] = [:]
+    /// The chosen film and paper.
+    @Published var filmStock: String = StockCatalog.defaultFilm
+    @Published var printStock: String = StockCatalog.defaultPaper
 
-    /// The strip's contents. A value, not a fetched resource.
-    let filters = FilmLook.catalog
+    /// The catalogue, read at launch.
+    @Published private(set) var catalog = StockCatalog(films: [], papers: [], slides: [])
 
-    // MARK: - the frames
+    /// The stocks, in the order the scrolling strip shows them.
+    var films: [Stock] { catalog.films + catalog.slides }
+    var papers: [Stock] { catalog.papers }
 
-    private var sourceImage: CIImage?
-    private var previewSource: CIImage?
-    private var thumbSource: CIImage?
+    /// A small square of the picked photo, for the strip's tiles.
+    @Published private(set) var thumbnail: UIImage?
+
+    /// Enough state to diagnose an engine failure without a debugger.
+    var diagnostics: String {
+        let root = engine?.resources.path ?? SpektraEngine.defaultResources().path
+        return [
+            "state: \(state)",
+            "profiles: \(catalog.films.count) films / \(catalog.slides.count) slides / \(catalog.papers.count) papers",
+            "resources: \(root)",
+            "engine: \(engine == nil ? "not started" : "ready")",
+            "status: \(statusText)"
+        ].joined(separator: "\n")
+    }
+
+    /// The picked photo, kept so it can be re-decoded at full size for export.
     private var pickedItem: PhotosPickerItem?
+    private var pickedImage: UIImage?
 
-    private let context = CIContext(options: [.useSoftwareRenderer: false])
+    /// The decoded frame in the engine's input space.
+    private var frame: DecodedFrame?
+
+    // MARK: - the engine
+
+    private var engine: SpektraEngine?
+    /// The canvas renderer. The view needs it to draw the texture.
+    private(set) var renderer: CanvasRenderer? = nil
+    private var device: MTLDevice?
+
+    /// The render loop's state.
     private var renderTask: Task<Void, Never>?
+    private var renderInFlight = false
+    private var needsRender = false
+    private var paramsDirty = false
+
+    // MARK: - life cycle
+
+    init() {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            state = .failed("这台设备没有可用的 Metal 设备")
+            return
+        }
+        self.device = device
+
+        // The catalogue and the defaults, before the engine: a stock list that
+        // depends on the engine's resources is a stock list that is empty when
+        // the resources are missing, and an empty list is harder to diagnose
+        // than an error.
+        let resources = SpektraEngine.defaultResources()
+        catalog = StockCatalog.load(resources: resources)
+
+        for control in ParamCatalog.all {
+            params[control.key] = control.defaultValue
+        }
+
+        do {
+            let engine = try SpektraEngine(device: device, resources: resources)
+            self.engine = engine
+            self.renderer = CanvasRenderer(device: device)
+            state = .empty
+            statusText = "就绪 · \(catalog.films.count) 款胶片 · \(catalog.papers.count) 款相纸"
+        } catch {
+            // The CI build does not ship the resource archive inside the .app:
+            // a 15 MB payload makes the side-loading installer fail when it
+            // copies the unpacked IPA to its fixed `App.app`, and it reports
+            // only "Failed to get bundle ID". The six-entry test bundle
+            // installed fine, so the archive is fetched here once instead.
+            state = .importing
+            statusText = "首次启动：正在准备引擎资源…"
+            Task { @MainActor in
+                await self.prepareResourcesAndStart(device: device)
+            }
+        }
+    }
+
+    /// First-launch path: download the resources, unpack them, start the
+    /// engine. Every launch after that finds the unpacked copy in Caches and
+    /// never reaches the network.
+    private func prepareResourcesAndStart(device: MTLDevice) async {
+        do {
+            let resources = try await SpektraEngine.fetchResourcesRemotely()
+            catalog = StockCatalog.load(resources: resources)
+            let engine = try SpektraEngine(device: device, resources: resources)
+            self.engine = engine
+            self.renderer = CanvasRenderer(device: device)
+            state = .empty
+            statusText = "就绪 · \(catalog.films.count) 款胶片 · \(catalog.papers.count) 款相纸"
+        } catch {
+            state = .failed(error.localizedDescription)
+            statusText = "资源准备失败"
+        }
+    }
+
+    /// Puts the previous run's crash on screen, so it does not take another
+    /// cycle of "it just closes" to find out what happened.
+    private func reportPreviousCrash() {
+        guard let crash = CrashLog.take() else { return }
+        state = .failed("上次异常退出：\(crash)")
+        statusText = "上次异常退出 · \(crash)"
+    }
 
     // MARK: - importing
 
-    /// Take a photo from the library.
+    /// A bounded centre crop of the picked image, for the filter strip.
     ///
-    /// `Data` is the one transfer representation every picker item supports —
-    /// no custom `Transferable`, no RAW-specific branch that only some UTI
-    /// paths reach. ImageIO then decodes it with a hard long-edge cap, which
-    /// is what keeps a 48 MP camera file from becoming an OOM kill.
+    /// Made from the original file bytes rather than the decoded float frame:
+    /// the frame is linear ProPhoto, which a UIImage would show incorrectly.
+    private static func squareThumbnail(from data: Data) -> UIImage? {
+        guard let image = UIImage(data: data) else { return nil }
+        let side: CGFloat = 160
+        let w = image.size.width, h = image.size.height
+        guard w > 0, h > 0 else { return nil }
+        let scale = side / min(w, h)
+        let drawn = CGSize(width: w * scale, height: h * scale)
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side))
+        return renderer.image { _ in
+            image.draw(in: CGRect(x: (side - drawn.width) / 2,
+                                 y: (side - drawn.height) / 2,
+                                 width: drawn.width, height: drawn.height))
+        }
+    }
+
+    /// Take a photo from the library.
     func importPicked(_ item: PhotosPickerItem?) async {
         guard let item else { return }
-        renderTask?.cancel()
+        pickedItem = item
         state = .importing
         statusText = "正在读取照片…"
 
         do {
-            guard let data = try await item.loadTransferable(type: Data.self),
-                  !data.isEmpty else {
-                throw LookError.unreadable
+            guard let data = try await item.loadTransferable(type: Data.self), !data.isEmpty else {
+                throw DecodeError.unreadable("照片没有返回数据")
             }
-            let (full, size) = try makeSource(from: data, longEdge: 3000)
-            guard size.width > 0, size.height > 0 else { throw LookError.unreadable }
-
-            sourceImage = full
-            pickedItem = item
-            sourceDescription = "\(Int(size.width)) × \(Int(size.height))"
-
-            let ps = min(1, 1440 / max(full.extent.width, full.extent.height))
-            let preview = normalised(full.transformed(
-                by: CGAffineTransform(scaleX: ps, y: ps)))
-            previewSource = preview
-            thumbSource = squareCrop(preview, side: 168)
-            originalImage = makeUIImage(from: preview)
-
-            await buildThumbnails()
-            renderPreviewNow()
+            // The preview decode is small: the live tier renders at 2048 px on
+            // the long edge, so a bigger decode buys nothing and costs
+            // seconds and hundreds of megabytes.
+            let decoded = try ImageDecoder.decode(data: data, maxLongEdge: ImageDecoder.previewLongEdge)
+            thumbnail = Self.squareThumbnail(from: data)
+            try await loadFrame(decoded)
+            statusText = "已载入 \(decoded.width)×\(decoded.height) · \(String(format: "%.1f", decoded.megapixels)) MP"
         } catch {
-            // A failed import must not wipe the picture that was already on
-            // screen. It says what happened in a dismissible notice instead.
-            state = .failed("导入失败：\(error.localizedDescription)")
+            state = .failed(error.localizedDescription)
             statusText = "导入失败"
         }
     }
 
-    /// Decode at a bounded size, with a fallback for containers ImageIO's
-    /// thumbnail path refuses.
-    private func makeSource(from data: Data, longEdge: Int) throws -> (CIImage, CGSize) {
-        if let source = CGImageSourceCreateWithData(data as CFData, nil) {
-            let options: [CFString: Any] = [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceThumbnailMaxPixelSize: longEdge,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceShouldCacheImmediately: true
-            ]
-            if let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) {
-                return (CIImage(cgImage: cg), CGSize(width: cg.width, height: cg.height))
+    /// Load an already-decoded frame: open a session and render the first
+    /// preview.
+    private func loadFrame(_ decoded: DecodedFrame) async throws {
+        guard let engine else { throw EngineError.failed(status: -1, message: "引擎没有启动") }
+        frame = decoded
+        sourceSize = CGSize(width: decoded.width, height: decoded.height)
+
+        // Open with the current stocks and parameters, so the first preview
+        // already shows what the user chose.
+        var delta = ParamDefaults.delta(film: filmStock, paper: printStock)
+        for (key, value) in params { delta[key] = .number(value) }
+
+        // The pointer has to stay alive across the `open` call: the engine
+        // borrows the pixels for the duration of that call and copies what it
+        // keeps, so the buffer must not go out of scope before it returns.
+        // Taking the address inside a closure and using it outside would
+        // leave it dangling -- which reads as a frame of noise rather than
+        // as a crash, and is much harder to find.
+        let reply: OpenReply = try decoded.pixels.withUnsafeBufferPointer { buffer in
+            guard let base = buffer.baseAddress else {
+                throw EngineError.failed(status: -1, message: "解码结果为空")
             }
-            if let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) {
-                let image = CIImage(cgImage: cg)
-                let scale = min(1, CGFloat(longEdge) / max(image.extent.width, image.extent.height))
-                let scaled = normalised(image.transformed(
-                    by: CGAffineTransform(scaleX: scale, y: scale)))
-                return (scaled, CGSize(width: scaled.extent.width, height: scaled.extent.height))
-            }
+            return try engine.open(pixels: EnginePixels(
+                data: base,
+                width: decoded.width,
+                height: decoded.height), params: delta)
         }
-        // Last resort for a format ImageIO would not open but UIKit will.
-        if let ui = UIImage(data: data), let cg = ui.cgImage {
-            let image = CIImage(cgImage: cg)
-            let scale = min(1, CGFloat(longEdge) / max(image.extent.width, image.extent.height))
-            let scaled = normalised(image.transformed(
-                by: CGAffineTransform(scaleX: scale, y: scale)))
-            return (scaled, CGSize(width: scaled.extent.width, height: scaled.extent.height))
+
+        if let meta = reply.meta, let w = meta.width, let h = meta.height {
+            sourceSize = CGSize(width: w, height: h)
         }
-        throw LookError.unreadable
+
+        // The solve must happen before the first render, or the print uses
+        // default exposure and the highlights blow out — which looks like a
+        // rendering bug and is not one.
+        try engine.solve(target: "both")
+
+        await renderNow()
     }
 
-    /// Give a `CIImage` a zero origin, so `createCGImage(from: extent)` is
-    /// unambiguous about which pixels it should produce.
-    private func normalised(_ image: CIImage) -> CIImage {
-        let extent = image.extent
-        guard abs(extent.origin.x) > 0.01 || abs(extent.origin.y) > 0.01 else { return image }
-        return image.transformed(by: CGAffineTransform(
-            translationX: -extent.origin.x, y: -extent.origin.y))
-    }
+    // MARK: - parameters
 
-    /// A centre square at a fixed size, for the strip.
-    private func squareCrop(_ image: CIImage, side: CGFloat) -> CIImage {
-        let extent = image.extent
-        let shortest = min(extent.width, extent.height)
-        guard shortest > 0 else { return image }
-        let rect = CGRect(x: extent.midX - shortest / 2,
-                          y: extent.midY - shortest / 2,
-                          width: shortest, height: shortest)
-        let cropped = image.cropped(to: rect)
-        let scale = side / shortest
-        return normalised(cropped.transformed(
-            by: CGAffineTransform(scaleX: scale, y: scale)))
-    }
-
-    // MARK: - the strip
-
-    /// One thumbnail per look, made from the user's own photo. Yielding
-    /// between them keeps the first frame of the import from stalling.
-    private func buildThumbnails() async {
-        guard let base = thumbSource else { return }
-        var built: [String: UIImage] = [:]
-        built.reserveCapacity(filters.count)
-        for look in filters {
-            let graded = FilmRenderer.render(look, on: base, intensity: 1)
-            if let ui = makeUIImage(from: graded) { built[look.id] = ui }
-            await Task.yield()
-        }
-        thumbs = built
-    }
-
-    // MARK: - choosing a look
-
-    func selectFilter(_ id: String) {
-        guard selectedFilterID != id else { return }
-        selectedFilterID = id
-        schedulePreview()
-    }
-
-    func intensityChanged(_ value: Double) {
-        intensity = value
-        schedulePreview()
-    }
-
-    /// A drag must not render sixty times. A short settle coalesces it into
-    /// one frame, and a newer request replaces the pending one.
-    private func schedulePreview() {
-        renderTask?.cancel()
-        renderTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 45_000_000)
-            guard !Task.isCancelled else { return }
-            self?.renderPreviewNow()
-        }
-    }
-
-    private func renderPreviewNow() {
-        guard let base = previewSource else { return }
-        let look = FilmLook.look(withID: selectedFilterID)
-        let started = CFAbsoluteTimeGetCurrent()
-        let graded = FilmRenderer.render(look, on: base, intensity: intensity)
-        guard let ui = makeUIImage(from: graded) else {
-            state = .failed("预览渲染失败，请换一张照片试试")
-            statusText = "预览失败"
-            return
-        }
-        previewImage = ui
-        lastRenderMs = (CFAbsoluteTimeGetCurrent() - started) * 1000
-        state = .ready
-        statusText = "\(look.name) · \(look.tag) · 强度 \(Int(intensity * 100))%"
-    }
-
-    /// Dismiss an error notice without changing the picture.
+    /// Dismiss an error notice without losing the picture already on screen.
     func dismissFailure() {
         if case .failed = state {
-            state = previewImage == nil ? .empty : .ready
+            state = renderedTexture == nil ? .empty : .ready
         }
     }
 
-    private func makeUIImage(from image: CIImage) -> UIImage? {
-        guard let cg = context.createCGImage(image, from: image.extent) else { return nil }
-        return UIImage(cgImage: cg, scale: 1, orientation: .up)
+    /// A parameter changed. Mark the render stale and schedule one.
+    func parameterChanged(_ key: String, _ value: Double) {
+        params[key] = value
+        paramsDirty = true
+        scheduleRender()
+    }
+
+    /// The film changed: reopen, because the stock is a session-level choice.
+    func filmChanged(_ stock: String) {
+        filmStock = stock
+        // Offer the paper that goes with this film, if the engine has a
+        // preview table paired with it.
+        if let paired = StockCatalog.pairedPaper(forFilm: stock, in: engine?.resources ?? SpektraEngine.defaultResources()) {
+            printStock = paired
+        }
+        reopenAndRender()
+    }
+
+    /// The paper changed: reopen, for the same reason.
+    func paperChanged(_ stock: String) {
+        printStock = stock
+        reopenAndRender()
+    }
+
+    /// Reopen the session with the current stocks and parameters.
+    private func reopenAndRender() {
+        guard let frame, let engine else { return }
+        var delta = ParamDefaults.delta(film: filmStock, paper: printStock)
+        for (key, value) in params { delta[key] = .number(value) }
+        do {
+            // The pointer has to outlive the call: the engine borrows the
+            // pixels for the duration of `open` and copies what it keeps.
+            try frame.pixels.withUnsafeBufferPointer { buffer in
+                guard let base = buffer.baseAddress else {
+                    throw EngineError.failed(status: -1, message: "解码结果为空")
+                }
+                _ = try engine.open(pixels: EnginePixels(
+                    data: base,
+                    width: frame.width,
+                    height: frame.height), params: delta)
+            }
+            try engine.solve(target: "both")
+            paramsDirty = false
+            scheduleRender()
+        } catch {
+            state = .failed(error.localizedDescription)
+        }
+    }
+
+    // MARK: - the render loop
+
+    /// Ask for a render. It runs when the current one is done and the user
+    /// has stopped moving.
+    func scheduleRender() {
+        needsRender = true
+        guard !renderInFlight else { return }
+        // `@MainActor` on the closure: `Task { ... }` is `@Sendable` by
+        // default, and a closure that captures a `MainActor`-isolated
+        // `ViewModel` is not Sendable unless the closure says where it
+        // runs. Without this, Swift 6's strict concurrency rejects it.
+        renderTask = Task { @MainActor [weak self] in
+            // A short settle, so a drag does not render on every frame. The
+            // preview is a reprint of a cached negative — fast — but not free.
+            try? await Task.sleep(nanoseconds: 90_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.renderNow()
+        }
+    }
+
+    /// Render now, one at a time.
+    private func renderNow() async {
+        guard renderInFlight == false else { return }
+        guard let engine, let renderer else { return }
+        guard frame != nil else { return }
+
+        renderInFlight = true
+        defer {
+            renderInFlight = false
+            // A request that arrived while this render was running runs now.
+            if needsRender {
+                needsRender = false
+                scheduleRender()
+            }
+        }
+
+        state = .rendering
+
+        do {
+            if paramsDirty {
+                var delta: [String: ParamValue] = [:]
+                for (key, value) in params { delta[key] = .number(value) }
+                _ = try engine.setParams(delta)
+                paramsDirty = false
+                // The exposure has to be recomputed when the compensation
+                // changed, or the print keeps the old EV.
+                try engine.solve(target: "both")
+            }
+
+            // `live` is the interactive tier: the engine renders at the live
+            // long edge (2048 px), which is what a phone screen can show.
+            let result = try engine.render(tier: "live", reprint: true)
+            renderer.setTexture(result.texture)
+            renderedTexture = result.texture
+            renderIdentity = result.progressID.isEmpty
+                ? UUID().uuidString
+                : result.progressID
+            lastRenderMs = result.elapsedMs
+            state = .ready
+            statusText = String(format: "渲染完成 · %.0f ms · %d×%d",
+                                result.elapsedMs, result.width, result.height)
+        } catch {
+            // The state stays `.failed`. It used to be forced back to `.ready`
+            // right here, which is the worst possible outcome: no error shown,
+            // `renderedTexture` nil, and every slider disabled with no
+            // explanation.
+            state = .failed(error.localizedDescription)
+            statusText = "渲染失败：\(error.localizedDescription)"
+        }
     }
 
     // MARK: - exporting
 
-    /// Re-grade the full-size frame and save it. There is no second decode
-    /// and no re-open: the same `CIImage` is rendered at its own extent.
+    /// Export the print to the photo library.
+    ///
+    /// The export is a `full` tier render — the original resolution — decoded
+    /// from the original file rather than the preview, so the exported file
+    /// is as large as the photo was.
     func exportToPhotos() async {
-        guard let source = sourceImage else {
-            statusText = "请先导入一张照片"
+        guard let engine, let pickedItem else {
+            statusText = "还没有可导出的照片"
             return
         }
-        state = .rendering
-        statusText = "正在以原图尺寸导出…"
-
-        let look = FilmLook.look(withID: selectedFilterID)
-        let graded = FilmRenderer.render(look, on: source, intensity: intensity)
-        guard let cg = context.createCGImage(graded, from: source.extent) else {
-            state = .failed("导出失败：无法生成图像")
-            return
-        }
-        let image = UIImage(cgImage: cg, scale: 1, orientation: .up)
-        guard let jpeg = image.jpegData(compressionQuality: 0.95) else {
-            state = .failed("导出失败：无法编码图像")
-            return
-        }
+        state = .importing
+        statusText = "正在导出原始分辨率…"
 
         do {
-            try await Self.saveToLibrary(jpeg)
+            // Re-decode at full size.
+            guard let data = try await pickedItem.loadTransferable(type: Data.self), !data.isEmpty else {
+                throw DecodeError.unreadable("照片没有返回数据")
+            }
+            let full = try ImageDecoder.decode(data: data, maxLongEdge: nil)
+
+            // Reopen on the full frame, with the same stocks and parameters.
+            var delta = ParamDefaults.delta(film: filmStock, paper: printStock)
+            for (key, value) in params { delta[key] = .number(value) }
+            // The pointer has to outlive the call: the engine borrows the
+            // pixels for the duration of `open` and copies what it keeps.
+            try full.pixels.withUnsafeBufferPointer { buffer in
+                guard let base = buffer.baseAddress else {
+                    throw EngineError.failed(status: -1, message: "解码结果为空")
+                }
+                _ = try engine.open(pixels: EnginePixels(
+                    data: base,
+                    width: full.width,
+                    height: full.height), params: delta)
+            }
+            try engine.solve(target: "both")
+
+            let result = try engine.render(tier: "full", reprint: false)
+            guard let texture = result.texture else {
+                throw EngineError.failed(status: -1, message: "引擎没有返回图像")
+            }
+
+            let image = try await Self.makeImage(from: texture, rowStridePx: result.rowStridePx)
+            try await PhotoLibrary.save(image)
+
+            statusText = String(format: "已导出 %d×%d 到相册", result.width, result.height)
             state = .ready
-            statusText = "已保存到相册 · \(Int(source.extent.width))×\(Int(source.extent.height))"
         } catch {
-            state = .failed("导出失败：\(error.localizedDescription)")
+            state = .failed(error.localizedDescription)
+            statusText = "导出失败"
         }
     }
 
-    /// The write is done outside the main actor's isolation domain.
+    /// The engine's texture → a `UIImage`, in sRGB.
     ///
-    /// Swift 6 will not send a `() -> Void` closure formed inside a
-    /// `@MainActor` context into Photos' `performChanges`: a closure that
-    /// captures an actor-isolated `UIImage` is not `Sendable`, and the
-    /// diagnostic is "sending value of non-Sendable type '() -> Void' risks
-    /// causing data races". Encoding to `Data` makes the captured value
-    /// `Sendable`, and building the closure in a `nonisolated` function means
-    /// there is no actor boundary to send it across in the first place.
-    private nonisolated static func saveToLibrary(_ data: Data) async throws {
-        let permission = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-        guard permission == .authorized || permission == .limited else {
-            throw LookError.permission
+    /// The texture is gamma-encoded ProPhoto RGB, `RGBA16Unorm` (the engine
+    /// applies `output_cctf_encoding` with `cctf_mode_for("ProPhoto RGB") == 1`);
+    /// the file has to be sRGB, so the conversion happens here:
+    /// ProPhoto → linear sRGB → sRGB-encoded 8-bit.
+    ///
+    /// The row offset is `y * rowStridePx * 4` **uint16s** in the *engine's*
+    /// own linear memory — but a private texture has no CPU-visible memory, so
+    /// we never read it directly. Instead we blit into a shared buffer: the
+    /// blit packs `width` pixels per row, so the buffer is addressed by
+    /// `y * width + x` (the engine's `rowStridePx` pitch is irrelevant here).
+    @MainActor
+    private static func makeImage(from texture: MTLTexture, rowStridePx: Int) async throws -> UIImage {
+        let width = texture.width
+        let height = texture.height
+        let bytesPerPixel = 4 * MemoryLayout<UInt16>.size   // RGBA16 = 8 bytes
+        let bytesPerRow = width * bytesPerPixel
+
+        // 1) Read the private texture back to the CPU. A private-storage
+        //    texture cannot be read with `contents()`/`getBytes` — the only
+        //    supported path is a blit into a shared `MTLBuffer`.
+        //    REQUIRES the engine to have created the texture with
+        //    `MTLTextureUsageCopySource`; otherwise this fails at runtime.
+        guard let buffer = texture.device.makeBuffer(length: bytesPerRow * height,
+                                                     options: .storageModeShared) else {
+            throw EngineError.failed(status: -1, message: "无法分配回读缓冲")
         }
-        try await PHPhotoLibrary.shared().performChanges { @Sendable in
-            let request = PHAssetCreationRequest.forAsset()
-            request.addResource(with: .photo, data: data, options: nil)
+        guard let commandBuffer = texture.device.makeCommandQueue()?.makeCommandBuffer(),
+              let blit = commandBuffer.makeBlitCommandEncoder() else {
+            throw EngineError.failed(status: -1, message: "无法创建 blit 编码器")
+        }
+        blit.copy(from: texture,
+                  sourceSlice: 0, sourceLevel: 0,
+                  sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                  sourceSize: MTLSize(width: width, height: height, depth: 1),
+                  to: buffer,
+                  destinationOffset: 0,
+                  destinationBytesPerRow: bytesPerRow,
+                  destinationBytesPerImage: 0)
+        blit.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+
+        // 2) Per-pixel RGBA16 uint16 data, now on the CPU (tightly packed).
+        //    `contents()` on a shared buffer is non-optional, so there is
+        //    nothing to unwrap.
+        let src = buffer.contents().assumingMemoryBound(to: UInt16.self)
+
+        // 3) RGBA16Unorm → Float → linear ProPhoto → linear sRGB → sRGB 8-bit.
+        //    The engine renders in the ProPhoto working space but applies the
+        //    output CCTF on write (`io.output_cctf_encoding = true`,
+        //    `cctf_mode_for("ProPhoto RGB") == 1`), so the stored values are
+        //    **gamma-encoded** ProPhoto, not linear. Recover linear ProPhoto
+        //    first, with the inverse of *ProPhoto's* curve -- a gamma of 1.8
+        //    with a 16x linear toe, which is what `nodes.metal`'s mode 1 is.
+        //    Skipping this step double-encodes and crushes the image to
+        //    near-black; using sRGB's curve instead of ProPhoto's shifts the
+        //    midtones, which is quieter but just as wrong.
+        var out = [UInt8](repeating: 0, count: width * height * 4)
+        let m = ImageDecoder.proPhotoToSRGBLinear
+        out.withUnsafeMutableBufferPointer { dst in
+            for y in 0..<height {
+                for x in 0..<width {
+                    let si = (y * width + x) * 4
+                    let di = si
+                    let encR = Float(src[si + 0]) / 65535.0
+                    let encG = Float(src[si + 1]) / 65535.0
+                    let encB = Float(src[si + 2]) / 65535.0
+                    let r = ImageDecoder.proPhotoToLinear(encR)
+                    let g = ImageDecoder.proPhotoToLinear(encG)
+                    let b = ImageDecoder.proPhotoToLinear(encB)
+                    let lr = m[0] * r + m[1] * g + m[2] * b
+                    let lg = m[3] * r + m[4] * g + m[5] * b
+                    let lb = m[6] * r + m[7] * g + m[8] * b
+                    dst[di + 0] = ImageDecoder.linearToSrgb(lr)
+                    dst[di + 1] = ImageDecoder.linearToSrgb(lg)
+                    dst[di + 2] = ImageDecoder.linearToSrgb(lb)
+                    dst[di + 3] = 255
+                }
+            }
+        }
+
+        // 4) An 8-bit sRGB CGImage (already transfer-encoded; colour space sRGB).
+        let data = Data(bytes: out, count: out.count)
+        guard let provider = CGDataProvider(data: data as CFData) else {
+            throw EngineError.failed(status: -1, message: "无法构造数据提供器")
+        }
+        guard let cgImage = CGImage(width: width, height: height,
+                                    bitsPerComponent: 8, bitsPerPixel: 32,
+                                    bytesPerRow: width * 4,
+                                    space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                    bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+                                    provider: provider, decode: nil,
+                                    shouldInterpolate: false,
+                                    intent: .defaultIntent) else {
+            throw EngineError.failed(status: -1, message: "无法构造图像")
+        }
+        return UIImage(cgImage: cgImage)
+    }
+
+}
+
+/// RAW 原始文件字节（ARW/CR3/DNG…）。优先按 `rawImage` 取原始数据；普通照片
+/// 回退到 `image`。`PhotosPickerItem.loadTransferable(type: Data.self)` 对于
+/// RAW 只能拿到渲染后的位图，拿不到原始字节，所以这里用自定义 Transferable。
+///
+/// The `importedContentType:` label is the one this SDK expects; the older
+/// `importedAs:` is not a parameter of `DataRepresentation` any more, and
+/// writing it is a compile error rather than a deprecation.
+struct PickedImageData: Transferable {
+    let data: Data
+
+    static var transferRepresentation: some TransferRepresentation {
+        DataRepresentation(importedContentType: .rawImage) { Self(data: $0) }
+        DataRepresentation(importedContentType: .image) { Self(data: $0) }
+    }
+}
+
+/// Saving to the photo library, with the permission the app needs.
+enum PhotoLibrary {
+    /// Ask for permission and save.
+    static func save(_ image: UIImage) async throws {
+        let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+        guard status == .authorized || status == .limited else {
+            throw ExportError.permissionDenied
+        }
+        try await PHPhotoLibrary.shared().performChanges {
+            PHAssetChangeRequest.creationRequestForAsset(from: image)
         }
     }
 }
 
-/// Errors that a person can act on. Every one is a sentence, not a code.
-enum LookError: LocalizedError, Sendable {
-    case unreadable
-    case permission
-    case noImage
-
-    var errorDescription: String? {
+enum ExportError: Error, CustomStringConvertible {
+    case permissionDenied
+    var description: String {
         switch self {
-        case .unreadable: "系统没能读出这张照片，请换一张再试"
-        case .permission: "没有相册写入权限，请在系统设置里允许"
-        case .noImage: "还没有导入照片"
+        case .permissionDenied: "没有相册写入权限，请在系统设置里允许"
         }
     }
 }
