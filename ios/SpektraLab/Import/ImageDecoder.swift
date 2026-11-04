@@ -78,7 +78,7 @@ enum ImageDecoder {
     /// A preview at 2048 px long edge needs no more, and decoding a 45 MP
     /// frame to throw most of it away costs seconds and hundreds of megabytes
     /// for a result nobody sees. The export path decodes at full size.
-    static let previewLongEdge = 3072
+    static let previewLongEdge = 2048
 
     /// Decode an image from data.
     ///
@@ -95,6 +95,21 @@ enum ImageDecoder {
             // the boost off keeps the frame closer to what the sensor saw.
             raw.boostAmount = 0
             raw.extendedDynamicRangeAmount = 0
+
+            // Decode at the preview size, not at the sensor size. A 45 MP RAW
+            // rendered at full size is a 180 MB CGImage before the engine sees
+            // a pixel, and with the RGBA buffer and the float32 output on top
+            // the peak is past 300 MB -- enough for iOS to kill the app right
+            // after import. `scaleFactor` makes the filter do the downscale
+            // during the decode instead.
+            if let maxLongEdge {
+                let native = raw.nativeSize
+                let longest = max(native.width, native.height)
+                if longest > 0 {
+                    raw.scaleFactor = min(1, Float(Double(maxLongEdge) / Double(longest)))
+                }
+            }
+
             if let output = raw.outputImage,
                let rendered = CIContext().createCGImage(output, from: output.extent) {
                 return try decode(cgImage: rendered, maxLongEdge: maxLongEdge)

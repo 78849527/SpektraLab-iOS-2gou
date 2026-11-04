@@ -291,6 +291,10 @@ def build() -> str:
         # the failure surfaces as "Failed to get bundle ID" from
         # `IXPlaceholder` -- nowhere near the actual cause.
         "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
+        # Off, so the hand-written CFBundleIcons in Info.plist survives.
+        # actool's merge only emits CFBundleIconName, which this device
+        # ignored -- the home screen fell back to the placeholder icon.
+        "INFOPLIST_ENABLE_CFBUNDLEICONS_MERGE": "NO",
     }
 
     def cfg(tag: str, name: str, settings: dict, extra: dict) -> str:
