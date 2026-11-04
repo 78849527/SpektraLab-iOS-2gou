@@ -27,10 +27,45 @@ from __future__ import annotations
 
 import os
 import sys
+import plistlib
 import zipfile
 from pathlib import Path
 
 STAMP = (2026, 1, 1, 0, 0, 0)
+
+# Keys Xcode stamps into the built Info.plist that the working reference IPA
+# does not carry. The DT* group is what `builtin-infoPlistUtility` derives from
+# the SDK; App Store submission requires it, side-loading does not.
+DROP_KEYS = frozenset({
+    "BuildMachineOSBuild",
+    "CFBundleSupportedPlatforms",
+    "NSAccentColorName",
+    "DTCompiler",
+    "DTPlatformBuild",
+    "DTPlatformName",
+    "DTPlatformVersion",
+    "DTSDKBuild",
+    "DTSDKName",
+    "DTXcode",
+    "DTXcodeBuild",
+})
+
+
+def clean_info_plist(raw: bytes) -> bytes:
+    """Rewrite an Info.plist without the keys the reference build lacks."""
+    parsed = plistlib.loads(raw)
+    for key in DROP_KEYS:
+        parsed.pop(key, None)
+
+    # `builtin-linkAssetCatalog` rewrites CFBundleIcons after the source plist
+    # is processed and leaves only CFBundleIconName; this puts the file list
+    # back. With the PNG at the bundle root, iOS resolves it from there.
+    primary = parsed.setdefault("CFBundleIcons", {}).setdefault("CFBundlePrimaryIcon", {})
+    primary.setdefault("CFBundleIconFiles", ["AppIcon60x60"])
+    primary.setdefault("CFBundleIconName", "AppIcon")
+    # `fmt=FMT_XML` keeps it text, which is what the reference ships and what
+    # every installer reads without complaint.
+    return plistlib.dumps(parsed, fmt=plistlib.FMT_XML)
 
 
 def info(name: str, directory: bool, executable: bool) -> zipfile.ZipInfo:
@@ -86,7 +121,10 @@ def main() -> None:
                 archive.writestr(info(name.rstrip("/") + "/", True, False), b"")
             else:
                 executable = path.resolve() in executables
-                archive.writestr(info(name, False, executable), path.read_bytes())
+                data = path.read_bytes()
+                if name.endswith(".app/Info.plist"):
+                    data = clean_info_plist(data)
+                archive.writestr(info(name, False, executable), data)
             written += 1
 
     # --- verify what was actually written --------------------------------
@@ -104,15 +142,20 @@ def main() -> None:
     app = next((i for i in entries if i.filename.endswith(".app/")), None)
     if app is None:
         sys.exit("no .app directory in the archive")
-    plist = check.read(app.filename + "Info.plist")
-    if b"CFBundleIdentifier" not in plist:
+    raw_plist = check.read(app.filename + "Info.plist")
+    shipped = plistlib.loads(raw_plist)
+    if not shipped.get("CFBundleIdentifier"):
         sys.exit("Info.plist in the archive has no CFBundleIdentifier")
+    left = sorted(k for k in DROP_KEYS if k in shipped)
+    if left:
+        sys.exit(f"keys that should have been stripped survived: {left}")
 
     executables = [i.filename for i in entries if (i.external_attr >> 16) & 0o111]
     print(f"{out.name}: {len(entries)} entries, {os.path.getsize(out) / 1048576:.2f} MB")
     print(f"  no extra fields, create_version 20, CRC OK")
     print(f"  bundle: {app.filename}")
     print(f"  executables: {[e.split('/')[-1] for e in executables]}")
+    print(f"  plist keys : {len(shipped)} | DT*/build keys stripped")
     assert written == len(entries)
 
 

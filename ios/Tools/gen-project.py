@@ -211,7 +211,10 @@ def build() -> str:
         return pid
 
     is_src = lambda q: q.suffix in (".swift", ".metal", ".cpp")
-    is_res = lambda q: q.suffix == ".xcassets" or q.name == "Resources"
+    # `.png` included: `CFBundleIconFiles` names `AppIcon60x60`, and iOS looks
+    # that up as `AppIcon60x60@2x.png` at the bundle root. Without this the
+    # staged icons never made it into the .app.
+    is_res = lambda q: q.suffix in (".xcassets", ".png") or q.name == "Resources"
     app_sources = phase("PBXSourcesBuildPhase", app_files + engine_files, is_src, "app-sources")
     app_resources = phase("PBXResourcesBuildPhase", app_files, is_res, "app-resources")
     app_frameworks = phase("PBXFrameworksBuildPhase", [], lambda q: False, "app-frameworks")
