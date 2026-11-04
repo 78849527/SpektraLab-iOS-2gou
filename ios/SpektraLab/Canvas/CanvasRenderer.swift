@@ -182,7 +182,7 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
     /// written after the packed transform, at a fixed 16-byte offset; the
     /// shader reads them as one `float4`.
     private func uploadFrame() {
-        guard let buffer, let aspect = sourceAspect, aspect > 0 else { return }
+        guard let transformBuffer, let aspect = sourceAspect, aspect > 0 else { return }
         let drawableAspect = 2.0 / 3.0
         var width = CGFloat(1)
         var height = CGFloat(1)
@@ -193,7 +193,10 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
         }
         let frame = SIMD4<Float>(Float(-width / 2), Float(width / 2),
                                  Float(-height / 2), Float(height / 2))
-        memcpy(buffer.contents().advanced(by: 16), &frame, MemoryLayout<SIMD4<Float>>.size)
+        withUnsafeBytes(of: frame) { bytes in
+            transformBuffer.contents().advanced(by: 16)
+                .copyMemory(from: bytes.baseAddress!, byteCount: bytes.count)
+        }
     }
 
     // MARK: - MTKViewDelegate
