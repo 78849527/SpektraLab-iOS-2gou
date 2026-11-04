@@ -147,6 +147,7 @@ jobs:
       # and all it reports is "Failed to get bundle ID". The URL in
       # `EngineBridge.remoteAssets` points at this tag and file name.
       - name: Publish the engine assets
+        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
