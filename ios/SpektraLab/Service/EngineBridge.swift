@@ -557,7 +557,7 @@ struct OpenReply: Decodable {
 }
 
 struct SetParamsReply: Decodable {
-    let invalidated: Bool?
+    let invalidated: String?
     let params: [String: ParamValue]?
 }
 

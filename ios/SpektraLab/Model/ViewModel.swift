@@ -387,7 +387,7 @@ final class ViewModel: ObservableObject {
             state = .ready
         } catch {
             state = .failed(error.localizedDescription)
-            statusText = "导出失败"
+            statusText = "导出失败：\(error.localizedDescription)"
         }
     }
 
