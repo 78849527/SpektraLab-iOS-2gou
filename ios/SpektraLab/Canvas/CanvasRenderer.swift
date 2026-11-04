@@ -212,6 +212,7 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
         encoder.setFragmentTexture(texture, index: 0)
         if let transformBuffer {
             encoder.setFragmentBuffer(transformBuffer, offset: 0, index: 0)
+            encoder.setFragmentBuffer(transformBuffer, offset: 16, index: 1)
         }
         // A full-screen triangle: three vertices, no vertex buffer, no index
         // buffer. The vertex shader positions them from `vertex_id`.

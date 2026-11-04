@@ -99,10 +99,10 @@ float encodeTransfer(float value, uint mode) {
 fragment float4 canvasFragment(CanvasVertexOut in [[stage_in]],
                                texture2d<float> source [[texture(0)]],
                                constant CanvasTransform& transform [[buffer(0)]],
-                               constant float4& frame [[buffer(0)]]) {
+                               constant float4& frame [[buffer(1)]]) {
     float2 position = (in.uv * 2.0 - 1.0) * float2(1.0, -1.0);
-    if (position.x < frame.minimum.x || position.x > frame.maximum.x ||
-        position.y < frame.minimum.y || position.y > frame.maximum.y) {
+    if (position.x < frame.x || position.x > frame.y ||
+        position.y < frame.z || position.y > frame.w) {
         discard_fragment();
     }
 
