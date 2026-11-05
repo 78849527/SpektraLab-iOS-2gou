@@ -23,6 +23,7 @@
 
 import Foundation
 import Metal
+import CryptoKit
 
 // MARK: - Errors
 
@@ -181,34 +182,15 @@ final class SpektraEngine {
         return Bundle.main.bundleURL.appending(path: "Resources/engine")
     }
 
-    /// Where the CI publishes the packed resources.
-    ///
-    /// The bundle deliberately does not carry them. A side-loading installer
-    /// unpacks the IPA into its own staging directory and copies the `.app` to
-    /// a fixed name; a 15 MB payload inside that copy fails on iOS 27 and all
-    /// it reports is "Failed to get bundle ID". An IPA without the archive
-    /// installs, so it is fetched here on first launch, unpacked into Caches,
-    /// and read from there on every launch after.
-    private static let remoteAssets = URL(
-        string: "https://github.com/Minerchu/SpektraLab-iOS/releases/download/engine-assets/engine-assets.bin")!
-
-    /// Downloads the resource archive and unpacks it. First launch only.
-    ///
-    /// - Throws: `EngineError.noResources` when the download fails or the
-    ///   archive cannot be unpacked.
+    /// Resolve local resources without making a network request.
     static func fetchResourcesRemotely() async throws -> URL {
-        if let archive = cachedArchiveURL(),
-           let unpacked = unpackBundledResources(archive) {
-            return unpacked
+        // Production builds carry the complete archive. Never require a
+        // network connection to recover from an engine startup error.
+        let bundled = defaultResources()
+        guard FileManager.default.fileExists(atPath: bundled.appendingPathComponent("spektrafilm_constants.bin").path) else {
+            throw EngineError.noResources("安装包缺少内置资源，请重新安装完整版本")
         }
-        let (archive, response) = try await URLSession.shared.download(from: remoteAssets)
-        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-            throw EngineError.noResources("资源下载失败（HTTP \(http.statusCode)）")
-        }
-        guard let directory = unpackBundledResources(archive) else {
-            throw EngineError.noResources("资源包无法解开")
-        }
-        return directory
+        return bundled
     }
 
     private static func cachedArchiveURL() -> URL? {
@@ -239,7 +221,8 @@ final class SpektraEngine {
         let fileManager = FileManager.default
         guard let caches = fileManager.urls(for: .cachesDirectory,
                                             in: .userDomainMask).first else { return nil }
-        let root = caches.appendingPathComponent("engine", isDirectory: true)
+        let digest = SHA256.hash(data: blob).map { String(format: "%02x", $0) }.joined()
+        let root = caches.appendingPathComponent("engine-\(digest)", isDirectory: true)
         if fileManager.fileExists(
             atPath: root.appendingPathComponent("spektrafilm_constants.bin").path) {
             return root

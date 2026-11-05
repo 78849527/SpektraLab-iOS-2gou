@@ -161,6 +161,8 @@ build_resources() {
   rm -f "$dst/engine-assets.bin"
   python3 "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pack-engine-assets.py" \
     "$staging" "$dst/engine-assets.bin"
+  mkdir -p "$app/Resources"
+  cp "$dst/engine-assets.bin" "$app/Resources/engine-assets.bin"
 }
 
 check_resources() {

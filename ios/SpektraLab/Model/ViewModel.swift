@@ -403,9 +403,7 @@ final class ViewModel: ObservableObject {
 
     /// Export the print to the photo library.
     ///
-    /// The export is a `full` tier render decoded from the original file at a
-    /// phone-safe 3840 px long edge. It keeps RAW quality without retaining a
-    /// 24–60 MP float frame and all engine intermediates at once.
+    /// Decode the source at its original resolution and render in strips.
     func exportToPhotos() async {
         guard let engine, let originalData else {
             statusText = "还没有可导出的照片"
@@ -426,6 +424,7 @@ final class ViewModel: ObservableObject {
 
                 // Reopen on the export frame with the same stocks and parameters.
                 var delta = ParamDefaults.delta(film: filmStock, paper: printStock)
+                delta["settings.striped"] = .bool(true)
                 for (key, value) in params { delta[key] = .number(value) }
                 try full.pixels.withUnsafeBufferPointer { buffer in
                     guard let base = buffer.baseAddress else {

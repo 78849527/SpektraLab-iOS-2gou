@@ -70,7 +70,7 @@ enum ImageDecoder {
     /// suggests. The engine's `live` tier caps the *render* at 2048 px on the
     /// long edge anyway, so a larger decode buys nothing for the preview —
     /// only for the export, where the app re-renders at `full`.
-    static let maxPixels = 24_000_000
+    static let maxPixels = 64_000_000
 
     /// The long edge the decoded frame is scaled to before it reaches the
     /// engine.
@@ -80,11 +80,8 @@ enum ImageDecoder {
     /// for a result nobody sees. The export path decodes at full size.
     static let previewLongEdge = 2048
 
-    /// A safe export ceiling. A full-resolution ARW render keeps the negative,
-    /// print buffers and result texture alive at the same time. On iOS that
-    /// can exceed the jetsam limit before Swift gets a chance to throw. 3840
-    /// px still gives a detailed 3:2 JPEG while keeping the peak predictable.
-    static let exportLongEdge = 3840
+    /// Export at the source resolution; only the interactive preview shrinks.
+    static let exportLongEdge: Int? = nil
 
     /// The colour space the pixel conversion below assumes. Core Image RAW
     /// rendering is allowed to choose a wide-gamut output (for example Display

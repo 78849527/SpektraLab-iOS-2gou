@@ -239,10 +239,12 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		B663863AD126A4768BAE9A7F /* Assets.xcassets */ = {isa = PBXBuildFile; fileRef = 89E16FC080E6CEAED03F1090; };
+		B7718ABD0022334455667788 /* Resources */ = {isa = PBXBuildFile; fileRef = DB4A69182F62F25C0AEBC961; };
 		C831EECBAB01524E02C71B42 /* app-resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B7718ABD0022334455667788 /* Resources */,
 				B663863AD126A4768BAE9A7F /* Assets.xcassets */
 			);
 			runOnlyForDeploymentPostprocessing = 0;

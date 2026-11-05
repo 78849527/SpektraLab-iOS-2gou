@@ -219,7 +219,7 @@ def build() -> str:
     # Keeping the 15 MB archive out of the install bundle is required for
     # CoreDevice/iOS 27 sideloading; the app bundle remains small and the
     # archive can be updated independently of the UI binary.
-    is_res = lambda q: q.suffix in (".xcassets", ".png")
+    is_res = lambda q: q.suffix in (".xcassets", ".png") or q.name == "Resources"
     app_sources = phase("PBXSourcesBuildPhase", app_files + engine_files, is_src, "app-sources")
     app_resources = phase("PBXResourcesBuildPhase", app_files, is_res, "app-resources")
     app_frameworks = phase("PBXFrameworksBuildPhase", [], lambda q: False, "app-frameworks")

@@ -24,7 +24,8 @@ private func check(_ path: String, expectedRAW: Bool) throws {
         )
     }
 
-    let frame = try ImageDecoder.decode(url: url, maxLongEdge: 512)
+    let edge = ProcessInfo.processInfo.environment["FULL_RESOLUTION"] == "1" ? nil : 512
+    let frame = try ImageDecoder.decode(url: url, maxLongEdge: edge)
     guard frame.width > 0, frame.height > 0,
           frame.pixels.count == frame.width * frame.height * 3 else {
         throw DecodeError.emptyImage
