@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE = ROOT / "engine"
@@ -33,7 +33,8 @@ def decode_raw(path: Path, work: Path) -> np.ndarray:
         "sips", "-s", "format", "jpeg", "--resampleHeightWidthMax", "360",
         str(path), "--out", str(jpeg),
     ], check=True, stdout=subprocess.DEVNULL)
-    rgb = np.asarray(Image.open(jpeg).convert("RGB"), dtype=np.float32) / 255.0
+    decoded = ImageOps.exif_transpose(Image.open(jpeg)).convert("RGB")
+    rgb = np.asarray(decoded, dtype=np.float32) / 255.0
     linear = np.where(rgb <= 0.04045, rgb / 12.92,
                       np.power((rgb + 0.055) / 1.055, 2.4)).astype(np.float32)
     return np.ascontiguousarray(linear @ SRGB_TO_PROPHOTO.T)
@@ -49,7 +50,7 @@ def profile_catalog(resources: Path) -> tuple[list[tuple[str, str]], list[tuple[
         if data.get("derived_from") and not support:
             support, kind = "film", "negative"
         item = (path.stem, info.get("name", path.stem))
-        if support == "paper":
+        if info.get("stage") == "printing" or support == "paper":
             papers.append(item)
         elif support == "film" and kind == "positive":
             slides.append(item)
@@ -68,7 +69,8 @@ def stage_resources(work: Path) -> Path:
     return staged
 
 
-def render(engine: Engine, frame: np.ndarray, film: str, paper: str) -> Image.Image:
+def render(engine: Engine, frame: np.ndarray, film: str, paper: str,
+           *, scan_film: bool = False) -> Image.Image:
     delta = {
         "input_color_space": "ProPhoto RGB", "input_cctf_decoding": False,
         "output_color_space": "sRGB", "output_cctf_encoding": True,
@@ -78,6 +80,8 @@ def render(engine: Engine, frame: np.ndarray, film: str, paper: str) -> Image.Im
         "glare_active": True, "glare_amount": 0.15,
         "density_curve_gamma": 0.45,
     }
+    if scan_film:
+        delta["scan_film"] = True
     with engine.open(frame, delta) as session:
         session.solve("both")
         rgba, _ = session.render("live")
@@ -90,7 +94,9 @@ def font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 
 
 def sheet(title: str, items: list[tuple[str, Image.Image]], output: Path) -> None:
-    columns, image_w, image_h, label_h = 4, 300, 200, 48
+    portrait = bool(items and items[0][1].height > items[0][1].width)
+    columns, label_h = (5, 48) if portrait else (4, 48)
+    image_w, image_h = (240, 360) if portrait else (300, 200)
     rows = (len(items) + columns - 1) // columns
     canvas = Image.new("RGB", (columns * image_w, 66 + rows * (image_h + label_h)), "#f3f3f1")
     draw = ImageDraw.Draw(canvas)
@@ -99,7 +105,8 @@ def sheet(title: str, items: list[tuple[str, Image.Image]], output: Path) -> Non
     for index, (name, image) in enumerate(items):
         x = (index % columns) * image_w
         y = 66 + (index // columns) * (image_h + label_h)
-        canvas.paste(image.resize((image_w, image_h), Image.Resampling.LANCZOS), (x, y))
+        tile = ImageOps.fit(image, (image_w, image_h), Image.Resampling.LANCZOS)
+        canvas.paste(tile, (x, y))
         draw.text((x + 9, y + image_h + 10), name, fill="#202020", font=label_font)
     output.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output, quality=84, optimize=True, progressive=True)
@@ -126,7 +133,7 @@ def main() -> None:
                     except EngineError as error:
                         print(f"skipped {film_id} + {paper_id}: {error}", file=sys.stderr)
                 sheet(f"Paper: {paper_name}", rendered, args.output / f"{paper_id}.jpg")
-            slide_items = [(name, render(engine, frame, stock, papers[0][0]))
+            slide_items = [(name, render(engine, frame, stock, papers[0][0], scan_film=True))
                            for stock, name in slides]
             sheet("Reversal films (no paper print stage)", slide_items,
                   args.output / "reversal-films.jpg")

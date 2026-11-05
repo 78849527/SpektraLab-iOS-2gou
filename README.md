@@ -14,13 +14,13 @@ SpektraLab 的 iPhone 社区移植版。它使用 C++20 与 Metal 运行真实�
 | 导入 | JPEG、Apple RAW/DNG，以及系统支持的 Sony ARW |
 | 导出 | 原始像素分辨率的 8-bit sRGB JPEG（当前解码上限 6400 万像素） |
 | 预览 | 保持原始宽高比，支持缩放、拖动和双击复位 |
-| 配置 | 27 款胶片/正片配置、7 款相纸配置 |
+| 配置 | 25 款拍摄胶片/正片、9 款相纸及电影打印片 |
 
 目前仍处于测试阶段。不同 iPhone 和 iOS 版本支持的相机 RAW 型号可能不同，重要照片请保留原文件。
 
 ## 胶片与相纸实测预览
 
-以下图片统一使用 Sony `DSC07461.ARW`，经 Apple RAW 解码后，以 iOS 当前默认参数通过项目自身的 C++/Metal 引擎生成。每张联系表固定一种相纸，并列出全部 23 款负片；这反映当前版本的真实输出，包括仍需继续修正的偏亮或偏色情况。
+以下图片统一使用 Nikon Z6 II 的 `marinasheyanova@marina_sheyanova_msh_8485_174539603751.nef`，经 Apple RAW 解码后，以 iOS 当前默认参数通过项目自身的 C++/Metal 引擎生成。每张联系表固定一种相纸或电影打印片，并列出全部 21 款拍摄负片；这反映当前版本的真实输出，包括仍需继续修正的偏亮或偏色情况。
 
 <details>
 <summary>Fujifilm Crystal Archive Type II</summary>
@@ -38,6 +38,18 @@ SpektraLab 的 iPhone 社区移植版。它使用 C++20 与 Metal 运行真实�
 <summary>Kodak Ektacolor Edge</summary>
 
 ![Kodak Ektacolor Edge combinations](docs/stock-previews/kodak_ektacolor_edge.jpg)
+</details>
+
+<details>
+<summary>Kodak Vision 2383（电影打印片）</summary>
+
+![Kodak Vision 2383 combinations](docs/stock-previews/kodak_2383.jpg)
+</details>
+
+<details>
+<summary>Kodak Vision Premier 2393（电影打印片）</summary>
+
+![Kodak Vision Premier 2393 combinations](docs/stock-previews/kodak_2393.jpg)
 </details>
 
 <details>

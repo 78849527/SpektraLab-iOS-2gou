@@ -98,9 +98,11 @@ struct StockCatalog: Sendable {
                 .appendingPathComponent("film_covers")
                 .appendingPathComponent(id)
                 .appendingPathExtension("jpg")
-            let stock = Stock(id: id, name: name, support: support, type: type,
+            let resolvedSupport: Stock.Support = (info["stage"] as? String) == "printing"
+                ? .paper : support
+            let stock = Stock(id: id, name: name, support: resolvedSupport, type: type,
                               coverURL: FileManager.default.fileExists(atPath: cover.path) ? cover : nil)
-            switch (support, type) {
+            switch (resolvedSupport, type) {
             case (.film, .negative): films.append(stock)
             case (.film, .positive): slides.append(stock)
             case (.paper, _): papers.append(stock)
