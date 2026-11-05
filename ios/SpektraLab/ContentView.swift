@@ -24,6 +24,24 @@ private extension Color {
     static var labRed: Color { Color(red: 0.96, green: 0.27, blue: 0.24) }
 }
 
+private extension View {
+    /// Native Liquid Glass on Xcode 27. Older CI images do not expose the
+    /// symbol, so they compile the same layout with a material fallback.
+    @ViewBuilder
+    nonisolated func labGlass<S: Shape>(_ active: Bool = true, in shape: S) -> some View {
+#if compiler(>=6.2)
+        glassEffect(active ? .regular : .clear, in: shape)
+#else
+        if active {
+            background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(Color.white.opacity(0.10), lineWidth: 1))
+        } else {
+            self
+        }
+#endif
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject private var model: ViewModel
     @State private var pickerItem: PhotosPickerItem?
@@ -88,7 +106,7 @@ struct ContentView: View {
                 Image(systemName: "photo.on.rectangle")
                     .font(.system(size: 16, weight: .semibold))
                     .frame(width: 38, height: 38)
-                    .glassEffect(.regular, in: Circle())
+                    .labGlass(in: Circle())
             }
             .contextMenu {
                 Button {
@@ -109,7 +127,7 @@ struct ContentView: View {
                 Image(systemName: "square.and.arrow.up")
                     .font(.system(size: 16, weight: .semibold))
                     .frame(width: 38, height: 38)
-                    .glassEffect(.regular, in: Circle())
+                    .labGlass(in: Circle())
             }
             .disabled(model.renderedTexture == nil)
             .opacity(model.renderedTexture == nil ? 0.4 : 1)
@@ -117,7 +135,7 @@ struct ContentView: View {
         .tint(Color.labRed)
         .padding(.horizontal, 14)
         .frame(minHeight: 44)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .labGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .padding(.top, 6)
         .padding(.horizontal, 10)
     }
@@ -234,7 +252,7 @@ struct ContentView: View {
                             .foregroundStyle(deck == tab ? Color.labCream : Color.secondary)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 7)
-                            .glassEffect(deck == tab ? .regular : .clear, in: Capsule())
+                            .labGlass(deck == tab, in: Capsule())
                     }
                     .buttonStyle(.plain)
                 }
@@ -253,7 +271,7 @@ struct ContentView: View {
 
             statusBar
         }
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .labGlass(in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .padding(.horizontal, 10)
         .padding(.bottom, 10)
     }
