@@ -166,11 +166,12 @@ mode 1 (ProPhoto): (v < 16/512)      ? v/16    : pow(v, 1.8)
 
 ## RAW 解码的两种路径
 
-1. **Core Image**:优先使用文件扩展名对应的 RAW UTI。iOS 27 会把 ARW/NEF 的
-   `CGImageSourceGetType` 报成 `public.tiff`;把该值当成 RAW 提示会丢厂商配置。
-   应用会先用 `CIRAWFilter.nativeSize` 和输出 extent 校验,拒绝内嵌缩略图
+1. **Core Image**:优先使用文件扩展名、PhotosPicker 类型或容器签名对应的 RAW UTI。
+   iOS 27 会把 ARW/NEF 的 `CGImageSourceGetType` 报成 `public.tiff`;把该值当成
+   RAW 提示会丢厂商配置。应用会先用 `CIRAWFilter.nativeSize` 和输出 extent 校验,拒绝内嵌缩略图
    (Nikon NEF 在 iOS 27 上会返回 120×160)。
-2. **LibRaw 0.22.2**:Core Image 返回空图、缩略图或低分辨率结果时启用。
+2. **LibRaw 0.22.2**:Core Image 返回空图、缩略图、低分辨率结果，或拒绝 TIFF
+   容器的 RAW 时启用。
    与桌面兼容策略相同:相机白平衡、AHD、无自动提亮、线性 ProPhoto。
    `ios/Tools/gen-project.py` 在生成工程前会检查 LibRaw 源码,避免链接期才失败。
 

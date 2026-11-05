@@ -266,7 +266,13 @@ final class ViewModel: ObservableObject {
             guard !data.isEmpty else {
                 throw DecodeError.unreadable("照片没有返回数据")
             }
-            try await importData(data)
+            // `PickedImageData` returns the original bytes but not the type
+            // that produced them. Keep the picker's RAW UTI, or sniff the
+            // container, so an ARW is not mistaken for a plain public.tiff.
+            let typeHint = item.supportedContentTypes.first {
+                $0.conforms(to: .rawImage)
+            } ?? ImageDecoder.inferredRAWTypeHint(for: data)
+            try await importData(data, typeHint: typeHint)
         } catch {
             state = .failed(error.localizedDescription)
             statusText = "导入失败"

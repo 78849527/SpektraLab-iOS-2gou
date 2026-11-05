@@ -8,7 +8,7 @@ SpektraLab 的 iPhone 社区移植版。它在设备上用 C++20 与 Metal 运�
 
 前往 **[Latest Release](https://github.com/Minerchu/SpektraLab-iOS/releases/latest)** 下载最新 IPA。Release 每次由 `main` 的最新成功构建替换，资产文件名带有提交号，避免 CDN 返回旧包。
 
-当前版本：**1.1.1**。本版重做了预览与片库布局，并加入真实片边、日期后背、片边方向与 120 拍摄数据。
+当前版本：**1.1.2**。本版重做了预览与片库布局，加入真实片边、日期后背、片边方向与 120 拍摄数据，并修复相册导入 Sony ARW。
 
 推荐下载文件名以 **`-unsigned.ipa`** 结尾的版本：
 
@@ -81,8 +81,8 @@ Release 中的 IPA 不包含你的个人开发证书，不能直接安装。免�
 ### 导入
 
 - JPEG 由 ImageIO/Core Image 解码，直接转换到引擎需要的线性 ProPhoto RGB。
-- 相机 RAW 优先交给 Core Image。App 会按文件扩展名选择真实 RAW UTI，因为 iOS 常把 ARW/NEF 报告成 `public.tiff`，直接使用系统返回值会丢失厂商配置。
-- Core Image 返回空图、内嵌缩略图或明显低分辨率结果时，回退到内置的 **LibRaw 0.22.2**。
+- 相机 RAW 优先交给 Core Image。App 会从文件扩展名、相册选择器或容器签名恢复真实 RAW UTI，因为 iOS 常把 ARW/NEF 报告成 `public.tiff`，直接使用系统返回值会丢失厂商配置。
+- Core Image 返回空图、内嵌缩略图、明显低分辨率结果，或拒绝 TIFF 容器的 RAW 时，回退到内置的 **LibRaw 0.22.2**。
 - LibRaw 回退策略与桌面版一致：相机白平衡、AHD、不自动提亮，输出线性 ProPhoto RGB。
 - 预览长边限制为 2048 px；导出时重新解码原始文件并使用原始像素分辨率。
 

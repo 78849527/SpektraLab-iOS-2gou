@@ -239,6 +239,10 @@ enum ImageDecoder {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
             throw DecodeError.unreadable("not an image this system recognises")
         }
+        let callerTypeHint = typeHint
+        let resolvedHint = callerTypeHint ?? inferredRAWTypeHint(for: data)
+        let authoritativeRAW = isRAW(source: source, typeHint: callerTypeHint)
+        var rawFailure: Error?
 
         // CIRAWFilter can return a non-nil implementation for ordinary JPEGs
         // on some iOS releases. Its concrete implementation also varies by
@@ -247,12 +251,12 @@ enum ImageDecoder {
         // so the property configuration lives in RAWDecodeSupport.m where it
         // can be guarded one setter at a time. Trust the container type
         // reported by ImageIO, never the mere presence of CIRAWFilter.
-        if isRAW(source: source, typeHint: typeHint) {
+        if isRAW(source: source, typeHint: resolvedHint) {
             // The identifier is what tells Core Image which maker profile to
             // use. A generic container type (`public.tiff`, or DNG for every
             // file) loses that profile. Prefer a real RAW UTI from ImageIO,
             // then the caller's extension-based hint.
-            let identifier = rawIdentifier(source: source, typeHint: typeHint)
+            let identifier = rawIdentifier(source: source, typeHint: resolvedHint)
 #if DEBUG
             let forceLibRaw = ProcessInfo.processInfo.environment["SPEKTRAFILM_FORCE_LIBRAW"] == "1"
 #else
@@ -286,40 +290,125 @@ enum ImageDecoder {
             // expose only its preview, and that set differs between macOS and
             // iOS. Fall back to the same pinned LibRaw release and the same
             // linear-ProPhoto policy the Mac engine uses.
-            var width = 0
-            var height = 0
-            let suffix = typeHint?.preferredFilenameExtension
-                ?? UTType(identifier ?? "")?.preferredFilenameExtension
-            guard let decoded = SPKLibRawDecode(
-                data,
-                suffix,
-                maxLongEdge ?? 0,
-                aspect.map(Double.init) ?? 0,
-                targetAspect.map(Double.init) ?? 0,
-                &width,
-                &height
-            ) else {
-                let message = String(cString: SPKLibRawLastError())
-                throw DecodeError.unreadable(message.isEmpty
-                    ? "Apple RAW and the bundled LibRaw decoder both refused this file"
-                    : message)
+            do {
+                return try decodeWithLibRaw(data: data, typeHint: resolvedHint,
+                                            identifier: identifier,
+                                            maxLongEdge: maxLongEdge,
+                                            aspect: aspect, targetAspect: targetAspect)
+            } catch {
+                guard !authoritativeRAW else { throw error }
+                // The RAW UTI came from a byte signature, not ImageIO or the
+                // caller. A plain TIFF can carry a maker string too, so give
+                // Core Image's ordinary decoder a chance after LibRaw fails.
+                rawFailure = error
+                NSLog("SpektraLab inferred RAW path failed for %@; trying Core Image: %@",
+                      identifier ?? "unknown", error.localizedDescription)
             }
-            guard width > 0, height > 0 else {
-                SPKLibRawFrameFree(decoded)
-                throw DecodeError.emptyImage
+        }
+        if let image = CIImage(data: data, options: [.applyOrientationProperty: true]) {
+            return try pixels(from: image, maxLongEdge: maxLongEdge,
+                              aspect: aspect, targetAspect: targetAspect)
+        }
+
+        // A TIFF-based RAW can arrive here when ImageIO reports public.tiff
+        // and the picker did not preserve a RAW type. LibRaw is the last
+        // chance before calling the file unreadable.
+        if isTIFFContainer(data) {
+            if let rawFailure {
+                throw DecodeError.unreadable(
+                    "Core Image could not decode this TIFF; \(rawFailure.localizedDescription)")
             }
-            return DecodedFrame(
-                pixels: FloatRGBPixels(librawFrame: decoded,
-                                       pixelCount: width * height * 3),
-                width: width,
-                height: height
-            )
+            do {
+                return try decodeWithLibRaw(data: data, typeHint: resolvedHint,
+                                            identifier: rawIdentifier(source: source,
+                                                                      typeHint: resolvedHint),
+                                            maxLongEdge: maxLongEdge,
+                                            aspect: aspect, targetAspect: targetAspect)
+            } catch {
+                throw DecodeError.unreadable(
+                    "Core Image could not decode this TIFF; \(error.localizedDescription)")
+            }
         }
-        guard let image = CIImage(data: data, options: [.applyOrientationProperty: true]) else {
-            throw DecodeError.unreadable("Core Image could not decode this image")
+        throw DecodeError.unreadable("Core Image could not decode this image")
+    }
+
+    private static func decodeWithLibRaw(data: Data, typeHint: UTType?,
+                                         identifier: String?, maxLongEdge: Int?,
+                                         aspect: CGFloat?, targetAspect: CGFloat?) throws -> DecodedFrame {
+        var width = 0
+        var height = 0
+        let suffix = typeHint?.preferredFilenameExtension
+            ?? UTType(identifier ?? "")?.preferredFilenameExtension
+        guard let decoded = SPKLibRawDecode(
+            data,
+            suffix,
+            maxLongEdge ?? 0,
+            aspect.map(Double.init) ?? 0,
+            targetAspect.map(Double.init) ?? 0,
+            &width,
+            &height
+        ) else {
+            let message = String(cString: SPKLibRawLastError())
+            throw DecodeError.unreadable(message.isEmpty
+                ? "Apple RAW and the bundled LibRaw decoder both refused this file"
+                : message)
         }
-        return try pixels(from: image, maxLongEdge: maxLongEdge,
-                          aspect: aspect, targetAspect: targetAspect)
+        guard width > 0, height > 0 else {
+            SPKLibRawFrameFree(decoded)
+            throw DecodeError.emptyImage
+        }
+        return DecodedFrame(
+            pixels: FloatRGBPixels(librawFrame: decoded,
+                                   pixelCount: width * height * 3),
+            width: width,
+            height: height
+        )
+    }
+
+    /// A picker can hand over original RAW bytes without the extension that
+    /// told us what they are. ImageIO then reports the TIFF shell as
+    /// `public.tiff`, so use the container's maker signature as a hint.
+    static func inferredRAWTypeHint(for data: Data) -> UTType? {
+        let sample = Data(data.prefix(2_000_000))
+        func has(_ bytes: [UInt8]) -> Bool { sample.starts(with: bytes) }
+        func contains(_ text: String) -> Bool {
+            sample.range(of: Data(text.utf8)) != nil
+        }
+
+        let isORF = has([0x49, 0x49, 0x52, 0x4F]) || has([0x4D, 0x4D, 0x4F, 0x52])
+        let isRW2 = has([0x49, 0x49, 0x55, 0x00])
+        let isCR3 = sample.count > 12 && sample.subdata(in: 4..<12) == Data("ftypcrx ".utf8)
+        let isRAF = contains("FUJIFILMCCD-RAW")
+        let isTIFF = isTIFFContainer(data)
+        guard isTIFF || isORF || isRW2 || isCR3 || isRAF else { return nil }
+
+        if isORF || isRW2 {
+            return UTType(filenameExtension: has([0x49, 0x49, 0x55, 0x00]) ? "rw2" : "orf")
+        }
+        if isCR3 {
+            return UTType(filenameExtension: "cr3")
+        }
+        if isRAF {
+            return UTType(filenameExtension: "raf")
+        }
+        if contains("SONY") {
+            return UTType(filenameExtension: "arw")
+        }
+        if contains("NIKON") || contains("Nikon") {
+            return UTType(filenameExtension: "nef")
+        }
+        if contains("Canon") {
+            return UTType(filenameExtension: "cr2")
+        }
+        if contains("DNG") {
+            return UTType(filenameExtension: "dng")
+        }
+        return nil
+    }
+
+    private static func isTIFFContainer(_ data: Data) -> Bool {
+        data.starts(with: [0x49, 0x49, 0x2A, 0x00])
+            || data.starts(with: [0x4D, 0x4D, 0x00, 0x2A])
     }
 
     /// The UTI that describes the camera container, not the TIFF shell it is
