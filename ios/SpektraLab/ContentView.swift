@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var showingFilms = false
     @State private var showingPapers = false
     @State private var showingExport = false
+    @State private var showingDiagnostics = false
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -54,6 +55,9 @@ struct ContentView: View {
                         selected: model.printStock) { stock in
                 model.paperChanged(stock)
             }
+        }
+        .sheet(isPresented: $showingDiagnostics) {
+            DiagnosticsSheet(model: model)
         }
         .alert("导出", isPresented: $showingExport) {
             Button("保存到相册") {
@@ -93,6 +97,12 @@ struct ContentView: View {
             ), matching: .images) {
                 Label("导入", systemImage: "photo.on.rectangle")
             }
+            Button {
+                showingDiagnostics = true
+            } label: {
+                Label("日志", systemImage: "doc.text.magnifyingglass")
+            }
+            .accessibilityLabel("诊断日志")
             Spacer()
             Text("SpektraLab").font(.headline.weight(.semibold))
             Spacer()
@@ -338,6 +348,76 @@ struct ContentView: View {
 
     private func nameOf(_ id: String, in stocks: [Stock]) -> String {
         stocks.first { $0.id == id }?.name ?? id
+    }
+}
+
+// MARK: - in-app diagnostic panel
+
+/// A snapshot is generated only when opened or refreshed. This avoids
+/// publishing every trace event into SwiftUI during an expensive render.
+struct DiagnosticsSheet: View {
+    @ObservedObject var model: ViewModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var report = ""
+    @State private var copied = false
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 12) {
+                Text("记录胶片/相纸切换、参数拖动、引擎计算时间及错误。不会自动上传，也不包含照片内容、文件路径或设备唯一标识。")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+
+                ScrollView {
+                    Text(report)
+                        .font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                }
+                .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, 16)
+
+                HStack(spacing: 10) {
+                    Button("刷新") {
+                        report = model.diagnosticsReport()
+                        copied = false
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("清空") {
+                        model.clearDiagnostics()
+                        report = model.diagnosticsReport()
+                        copied = false
+                    }
+                    .buttonStyle(.bordered)
+
+                    Spacer()
+
+                    Button {
+                        report = model.diagnosticsReport()
+                        UIPasteboard.general.string = report
+                        copied = true
+                    } label: {
+                        Label(copied ? "已复制" : "复制全部", systemImage: "doc.on.doc")
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+            }
+            .padding(.top, 16)
+            .navigationTitle("诊断日志")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("关闭") { dismiss() }
+                }
+            }
+        }
+        .onAppear { report = model.diagnosticsReport() }
     }
 }
 

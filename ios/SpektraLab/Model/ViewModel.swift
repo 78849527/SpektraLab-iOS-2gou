@@ -91,11 +91,65 @@ final class ViewModel: ObservableObject {
     private var needsRender = false
     private var paramsDirty = false
 
+    // In-app, on-device performance trace. No photos, paths or identifiers.
+    // Bounded and deliberately not @Published: logging must not redraw SwiftUI.
+    private let diagnosticsStartedAt = ProcessInfo.processInfo.systemUptime
+    private var diagnosticsLines: [String] = []
+    private var sliderEventsSinceRender = 0
+    private var lastChangedParameter = "-"
+    private var totalPreviewRenders = 0
+
+    private func elapsedMs(since start: TimeInterval) -> Int {
+        Int((ProcessInfo.processInfo.systemUptime - start) * 1_000)
+    }
+
+    private func diagnosticNote(_ message: String) {
+        let stamp = elapsedMs(since: diagnosticsStartedAt)
+        diagnosticsLines.append("[+\(stamp)ms] \(message)")
+        if diagnosticsLines.count > 160 {
+            diagnosticsLines.removeFirst(diagnosticsLines.count - 160)
+        }
+    }
+
+    /// Snapshot on demand: the panel can be opened after a laggy interaction.
+    /// Never includes source pixels, photo names, paths or device identifiers.
+    func diagnosticsReport() -> String {
+        let bundleVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+        let buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
+        let loadedSize = "\(Int(sourceSize.width))x\(Int(sourceSize.height))"
+        let history = diagnosticsLines.isEmpty ? "(暂无事件)" : diagnosticsLines.joined(separator: "\n")
+        return """
+        SpektraLab / iOS 16 诊断日志 v1
+        生成时间: \(ISO8601DateFormatter().string(from: Date()))
+        App: \(bundleVersion) (\(buildNumber))
+        系统: iOS \(UIDevice.current.systemVersion)
+        设备类型: \(UIDevice.current.model)
+        会话运行: \(elapsedMs(since: diagnosticsStartedAt)) ms
+        图片预览尺寸: \(loadedSize)
+        当前胶片: \(filmStock)
+        当前相纸: \(printStock)
+        本次预览渲染: \(totalPreviewRenders) 次
+        最后引擎渲染: \(Int(lastRenderMs)) ms
+        待处理滑块事件: \(sliderEventsSinceRender)
+        最近参数: \(lastChangedParameter)
+        --- 事件（最近160条） ---
+        \(history)
+        """
+    }
+
+    func clearDiagnostics() {
+        diagnosticsLines.removeAll(keepingCapacity: true)
+        sliderEventsSinceRender = 0
+        diagnosticNote("用户清空诊断日志")
+    }
+
     // MARK: - life cycle
 
     init() {
+        diagnosticNote("应用启动；性能日志开始，未上传任何数据")
         guard let device = MTLCreateSystemDefaultDevice() else {
             state = .failed("这台设备没有可用的 Metal 设备")
+            diagnosticNote("错误：没有 Metal 设备")
             return
         }
         self.device = device
@@ -115,10 +169,12 @@ final class ViewModel: ObservableObject {
             let engine = try SpektraEngine(device: device, resources: resources)
             self.engine = engine
             self.renderer = CanvasRenderer(device: device)
+            diagnosticNote("引擎初始化成功")
             state = .empty
             statusText = "就绪 · \(catalog.films.count) 款胶片 · \(catalog.papers.count) 款相纸"
             reportPreviousCrash()
         } catch {
+            diagnosticNote("引擎本地初始化失败，准备资源下载：\(error.localizedDescription)")
             // The CI build does not ship the resource archive inside the .app:
             // a 15 MB payload makes the side-loading installer fail when it
             // copies the unpacked IPA to its fixed `App.app`, and it reports
@@ -142,10 +198,12 @@ final class ViewModel: ObservableObject {
             let engine = try SpektraEngine(device: device, resources: resources)
             self.engine = engine
             self.renderer = CanvasRenderer(device: device)
+            diagnosticNote("远程资源准备与引擎初始化成功")
             state = .empty
             statusText = "就绪 · \(catalog.films.count) 款胶片 · \(catalog.papers.count) 款相纸"
             reportPreviousCrash()
         } catch {
+            diagnosticNote("错误：资源准备失败：\(error.localizedDescription)")
             state = .failed(error.localizedDescription)
             statusText = "资源准备失败"
         }
@@ -156,6 +214,7 @@ final class ViewModel: ObservableObject {
     private func reportPreviousCrash() {
         guard let crash = CrashLog.take() else { return }
         state = .failed("上次异常退出：\(crash)")
+        diagnosticNote("上次异常退出：\(crash)")
         statusText = "上次异常退出 · \(crash)"
     }
 
@@ -165,6 +224,8 @@ final class ViewModel: ObservableObject {
     func importPicked(_ item: PhotosPickerItem?) async {
         guard let item else { return }
         pickedItem = item
+        let importStarted = ProcessInfo.processInfo.systemUptime
+        diagnosticNote("开始导入照片")
         state = .importing
         statusText = "正在读取照片…"
 
@@ -180,9 +241,11 @@ final class ViewModel: ObservableObject {
             // the long edge, so a bigger decode buys nothing and costs
             // seconds and hundreds of megabytes.
             let decoded = try ImageDecoder.decode(data: data, maxLongEdge: ImageDecoder.previewLongEdge)
+            diagnosticNote("照片读取/解码完成：\(decoded.width)x\(decoded.height)，耗时 \(elapsedMs(since: importStarted))ms")
             try await loadFrame(decoded)
             statusText = "已载入 \(decoded.width)×\(decoded.height) · \(String(format: "%.1f", decoded.megapixels)) MP"
         } catch {
+            diagnosticNote("错误：导入失败：\(error.localizedDescription)")
             state = .failed(error.localizedDescription)
             statusText = "导入失败"
         }
@@ -206,6 +269,7 @@ final class ViewModel: ObservableObject {
         // Taking the address inside a closure and using it outside would
         // leave it dangling -- which reads as a frame of noise rather than
         // as a crash, and is much harder to find.
+        let openStarted = ProcessInfo.processInfo.systemUptime
         let reply: OpenReply = try decoded.pixels.withUnsafeBufferPointer { buffer in
             guard let base = buffer.baseAddress else {
                 throw EngineError.failed(status: -1, message: "解码结果为空")
@@ -223,7 +287,10 @@ final class ViewModel: ObservableObject {
         // The solve must happen before the first render, or the print uses
         // default exposure and the highlights blow out — which looks like a
         // rendering bug and is not one.
+        let openMs = elapsedMs(since: openStarted)
+        let solveStarted = ProcessInfo.processInfo.systemUptime
         try engine.solve(target: "both")
+        diagnosticNote("初次载入：open=\(openMs)ms，solve=\(elapsedMs(since: solveStarted))ms（主线程）")
 
         await renderNow()
     }
@@ -233,13 +300,17 @@ final class ViewModel: ObservableObject {
     /// A parameter changed. Mark the render stale and schedule one.
     func parameterChanged(_ key: String, _ value: Double) {
         params[key] = value
+        sliderEventsSinceRender += 1
+        lastChangedParameter = key
         paramsDirty = true
         scheduleRender()
     }
 
     /// The film changed: reopen, because the stock is a session-level choice.
     func filmChanged(_ stock: String) {
+        let previous = filmStock
         filmStock = stock
+        diagnosticNote("选择胶片：\(previous) -> \(stock)")
         // Offer the paper that goes with this film, if the engine has a
         // preview table paired with it.
         if let paired = StockCatalog.pairedPaper(forFilm: stock, in: engine?.resources ?? SpektraEngine.defaultResources()) {
@@ -250,13 +321,16 @@ final class ViewModel: ObservableObject {
 
     /// The paper changed: reopen, for the same reason.
     func paperChanged(_ stock: String) {
+        let previous = printStock
         printStock = stock
+        diagnosticNote("选择相纸：\(previous) -> \(stock)")
         reopenAndRender()
     }
 
     /// Reopen the session with the current stocks and parameters.
     private func reopenAndRender() {
         guard let frame, let engine else { return }
+        let reopenedAt = ProcessInfo.processInfo.systemUptime
         var delta = ParamDefaults.delta(film: filmStock, paper: printStock)
         for (key, value) in params { delta[key] = .number(value) }
         do {
@@ -271,10 +345,14 @@ final class ViewModel: ObservableObject {
                     width: frame.width,
                     height: frame.height), params: delta)
             }
+            let openMs = elapsedMs(since: reopenedAt)
+            let solveStarted = ProcessInfo.processInfo.systemUptime
             try engine.solve(target: "both")
+            diagnosticNote("胶片/相纸切换：open=\(openMs)ms，solve=\(elapsedMs(since: solveStarted))ms，总耗时=\(elapsedMs(since: reopenedAt))ms（主线程）")
             paramsDirty = false
             scheduleRender()
         } catch {
+            diagnosticNote("错误：重新打开引擎失败：\(error.localizedDescription)")
             state = .failed(error.localizedDescription)
         }
     }
@@ -316,21 +394,35 @@ final class ViewModel: ObservableObject {
         }
 
         state = .rendering
+        let renderStarted = ProcessInfo.processInfo.systemUptime
+        let sliderCount = sliderEventsSinceRender
+        let parameterName = lastChangedParameter
+        sliderEventsSinceRender = 0
+        var parameterUpdateMs = 0
+        var solveMs = 0
 
         do {
             if paramsDirty {
+                let updateStarted = ProcessInfo.processInfo.systemUptime
                 var delta: [String: ParamValue] = [:]
                 for (key, value) in params { delta[key] = .number(value) }
                 _ = try engine.setParams(delta)
+                parameterUpdateMs = elapsedMs(since: updateStarted)
                 paramsDirty = false
                 // The exposure has to be recomputed when the compensation
                 // changed, or the print keeps the old EV.
+                let solveStarted = ProcessInfo.processInfo.systemUptime
                 try engine.solve(target: "both")
+                solveMs = elapsedMs(since: solveStarted)
             }
 
             // `live` is the interactive tier: the engine renders at the live
             // long edge (2048 px), which is what a phone screen can show.
+            let engineRenderStarted = ProcessInfo.processInfo.systemUptime
             let result = try engine.render(tier: "live", reprint: true)
+            let engineRenderMs = elapsedMs(since: engineRenderStarted)
+            totalPreviewRenders += 1
+            diagnosticNote("预览：滑块更新=\(sliderCount)次，参数=\(parameterName)，setParams=\(parameterUpdateMs)ms，solve=\(solveMs)ms，render=\(engineRenderMs)ms，引擎报告=\(Int(result.elapsedMs))ms，总耗时=\(elapsedMs(since: renderStarted))ms（主线程）")
             renderer.setTexture(result.texture)
             renderedTexture = result.texture
             renderIdentity = result.progressID.isEmpty
@@ -345,6 +437,7 @@ final class ViewModel: ObservableObject {
             // right here, which is the worst possible outcome: no error shown,
             // `renderedTexture` nil, and every slider disabled with no
             // explanation.
+            diagnosticNote("错误：预览渲染失败：\(error.localizedDescription)，耗时 \(elapsedMs(since: renderStarted))ms")
             state = .failed(error.localizedDescription)
             statusText = "渲染失败：\(error.localizedDescription)"
         }
@@ -366,6 +459,8 @@ final class ViewModel: ObservableObject {
             statusText = "还没有可导出的照片"
             return
         }
+        let exportStarted = ProcessInfo.processInfo.systemUptime
+        diagnosticNote("开始原始分辨率导出")
         state = .importing
         statusText = "正在导出原始分辨率…"
 
@@ -404,8 +499,10 @@ final class ViewModel: ObservableObject {
             try await PhotoLibrary.save(image)
 
             statusText = String(format: "已导出 %d×%d 到相册", result.width, result.height)
+            diagnosticNote("导出成功：\(result.width)x\(result.height)，总耗时 \(elapsedMs(since: exportStarted))ms")
             state = .ready
         } catch {
+            diagnosticNote("错误：导出失败：\(error.localizedDescription)，耗时 \(elapsedMs(since: exportStarted))ms")
             state = .failed(error.localizedDescription)
             statusText = "导出失败：\(error.localizedDescription)"
         }
