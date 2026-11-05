@@ -34,7 +34,7 @@
 name: Build IPA
 on:
   push:
-    branches: [main]
+    branches: [main, 'fix/ios16-metal-resources']
     # Documentation does not need forty minutes on a macOS runner, and
     # `cancel-in-progress` above means a typo in the README would otherwise
     # cancel a build that is about to finish.
@@ -147,7 +147,7 @@ jobs:
       # and all it reports is "Failed to get bundle ID". The URL in
       # `EngineBridge.remoteAssets` points at this tag and file name.
       - name: Publish the engine assets
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/fix/ios16-metal-resources' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -158,8 +158,8 @@ jobs:
             exit 1
           fi
           echo "asset: $(du -h "$asset" | cut -f1)"
-          gh release view engine-assets >/dev/null 2>&1 || gh release create engine-assets --title "Engine assets" --notes "Baked engine resources, downloaded by the app on first launch. The IPA does not carry them: a 15 MB payload inside the .app makes a side-loading installer fail with Failed to get bundle ID."
-          gh release upload engine-assets "$asset" --clobber
+          gh release view engine-assets-ios16-v1 >/dev/null 2>&1 || gh release create engine-assets-ios16-v1 --target "$GITHUB_SHA" --title "iOS 16 Metal 3.0 engine assets (v1)" --notes "Dedicated resource build for iOS 16. Compiled with -std=metal3.0 and -mios-version-min=16.0. Do not replace with upstream rolling assets."
+          gh release upload engine-assets-ios16-v1 "$asset" --clobber
           echo "published to the engine-assets release"
 
       - name: App icon

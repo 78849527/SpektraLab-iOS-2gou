@@ -44,7 +44,9 @@ IOS_MIN="16.0"
 # engine's `check_math_mode` probe rejects a fast-math metallib outright, and
 # the app will not start.
 MATH_FLAGS=(-fmetal-math-mode=safe -fmetal-math-fp32-functions=precise)
-TARGET_FLAGS=(-mios-version-min="$IOS_MIN")
+# Explicitly target MSL 3.0 (iOS 16). Modern Xcode's default MSL 3.2
+# cannot be loaded on iOS 16 even if -mios-version-min is 16.0.
+TARGET_FLAGS=(-mios-version-min="$IOS_MIN" -std=metal3.0)
 
 build_metallib() {
   local src="$engine/src/shaders"

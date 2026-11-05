@@ -183,7 +183,7 @@ final class SpektraEngine {
     /// installs, so it is fetched here on first launch, unpacked into Caches,
     /// and read from there on every launch after.
     private static let remoteAssets = URL(
-        string: "https://github.com/Minerchu/SpektraLab-iOS/releases/download/engine-assets/engine-assets.bin")!
+        string: "https://github.com/78849527/SpektraLab-iOS-2gou/releases/download/engine-assets-ios16-v1/engine-assets.bin")!
 
     /// Downloads the resource archive and unpacks it. First launch only.
     ///
@@ -219,7 +219,9 @@ final class SpektraEngine {
         let fileManager = FileManager.default
         guard let caches = fileManager.urls(for: .cachesDirectory,
                                             in: .userDomainMask).first else { return nil }
-        let root = caches.appendingPathComponent("engine", isDirectory: true)
+        // Resource ABI/version isolation: do not reuse an older cached metallib
+        // (possibly built using MSL 3.2) when installing the iOS 16 build.
+        let root = caches.appendingPathComponent("engine-ios16-msl30-v1", isDirectory: true)
         if fileManager.fileExists(
             atPath: root.appendingPathComponent("spektrafilm_constants.bin").path) {
             return root
