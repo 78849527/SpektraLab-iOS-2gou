@@ -6,14 +6,9 @@
 //  the engine refuses to start if it detects fast-math drift in its kernels,
 //  so they must not inherit the app's `MTL_FAST_MATH` setting.
 //
-//  This shader does two things: it draws the engine's texture over the
-//  drawable, and it converts the working space to the display's.
-//
-//  The conversion is the reason it exists. The engine's texture holds linear
-//  ProPhoto RGB; a display wants gamma-encoded sRGB. The matrices and the
-//  transfer function's mode come from the engine's own
-//  `spk_output_transform`, so the numbers here are the engine's rather than a
-//  second copy that can drift from them.
+//  This shader draws the engine's sRGB texture over the drawable and owns the
+//  aspect-fit/zoom viewport. The transform remains available for parity with
+//  the desktop canvas, but the iOS session currently uploads the identity.
 
 #include <metal_stdlib>
 using namespace metal;
@@ -108,11 +103,16 @@ fragment float4 canvasFragment(CanvasVertexOut in [[stage_in]],
 
     constexpr sampler linearSampler(filter::linear, address::clamp_to_edge);
 
-    float3 rgb = source.sample(linearSampler, in.uv).rgb;
+    // The frame rectangle is also the zoom window. Remap the viewport
+    // position back into the photo so aspect fit does not crop the centre
+    // strip of a portrait image.
+    float2 local = float2((position.x - frame.x) / (frame.y - frame.x),
+                          (position.y - frame.z) / (frame.w - frame.z));
+    float2 photoUV = float2(local.x, 1.0 - local.y);
+    float3 rgb = source.sample(linearSampler, photoUV).rgb;
 
-    // The source arrives in the working space's own encoding. The engine's
-    // texture is linear, so mode 0 is what it reports; the transform's own
-    // numbers are used anyway, because they are the engine's.
+    // The iOS engine result and drawable are both sRGB encoded. With the
+    // identity transform, decoding and re-encoding preserve those values.
     float3 linear = float3(decodeTransfer(rgb.r, transform.sourceCCTFMode),
                             decodeTransfer(rgb.g, transform.sourceCCTFMode),
                             decodeTransfer(rgb.b, transform.sourceCCTFMode));
@@ -125,8 +125,6 @@ fragment float4 canvasFragment(CanvasVertexOut in [[stage_in]],
                              encodeTransfer(converted.g, transform.targetCCTFMode),
                              encodeTransfer(converted.b, transform.targetCCTFMode));
 
-    // The drawable is `rgba16Float`, so the value written is linear-ish; the
-    // system converts it for the display's transfer function. Clamp to the
-    // range a float can carry without wrapping.
+    // The drawable is `bgra8Unorm`; clamp before conversion to 8-bit.
     return float4(clamp(encoded, 0.0, 1.0), 1.0);
 }

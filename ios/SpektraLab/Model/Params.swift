@@ -134,6 +134,11 @@ enum ParamCatalog {
 enum ParamDefaults {
     static func delta(film: String, paper: String) -> [String: ParamValue] {
         var delta: [String: ParamValue] = [
+            // Match the desktop preview host's colour contract.
+            "input_color_space": .string("ProPhoto RGB"),
+            "input_cctf_decoding": .bool(false),
+            "output_color_space": .string("sRGB"),
+            "output_cctf_encoding": .bool(true),
             FilmParam.filmStock.key: .string(film),
             FilmParam.printStock.key: .string(paper),
             FilmParam.autoExposure.key: .bool(true),

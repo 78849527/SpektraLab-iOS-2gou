@@ -1,23 +1,8 @@
 //  CanvasRenderer.swift — the engine's picture on the screen.
 //
-//  The engine renders into an `MTLTexture` (`RGBA16Unorm`, ProPhoto RGB — the
-//  working space, RFC-018 §5.1). This file draws that texture, and converts
-//  it to the display's space on the way.
-//
-//  **The conversion is not optional.** The texture holds gamma-encoded
-//  ProPhoto RGB (the engine sets `output_cctf_encoding = true` and
-//  `cctf_mode_for("ProPhoto RGB") == 1`, an sRGB-style transfer); a screen
-//  wants gamma-encoded sRGB in the display's primaries. The
-//  macOS app does this with the engine's own output transform
-//  (`spk_output_transform`), which is a fetch of matrices and constants that
-//  the app then runs in its own kernel. iOS does the same thing, with the
-//  same two matrices, and the difference is where they come from.
-//
-//  Actually — simpler and more honest: iOS draws into an sRGB drawable, and
-//  the conversion is done by the shader below with the matrices from the
-//  engine's `spk_output_transform`, so the numbers are the engine's own
-//  rather than a second copy that can drift from them. The transform is
-//  fetched once per destination space and cached.
+//  The iOS session asks the engine for gamma-encoded sRGB `RGBA16Unorm`, the
+//  same output contract as the desktop preview host. This file draws that
+//  texture into an sRGB drawable without applying another colour transform.
 
 import Foundation
 import Metal
@@ -37,7 +22,7 @@ struct OutputTransform {
     let gamutCompressConsts: [Float]
     let gamutCompressActive: Bool
 
-    /// The identity: the working space to itself.
+    /// The identity: an sRGB engine result to the sRGB drawable.
     static let identity = OutputTransform(matrix: [1, 0, 0, 0, 1, 0, 0, 0, 1],
                                           sourceCCTFMode: 0, targetCCTFMode: 0,
                                           gamutCompressConsts: [], gamutCompressActive: false)
@@ -46,6 +31,11 @@ struct OutputTransform {
 /// Draws the engine's texture into an `MTKView`.
 @MainActor
 final class CanvasRenderer: NSObject, MTKViewDelegate {
+    /// `CanvasTransform` is three Metal float3 columns (16 bytes each), then
+    /// four uints and padding: 80 bytes total. Keep the frame rectangle after
+    /// that struct; the old 16-byte offset overwrote matrix row 2 and made
+    /// every rendered photo turn magenta as soon as the shader ran.
+    private static let frameBufferOffset = 80
     let device: MTLDevice
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
@@ -53,37 +43,16 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
     /// The texture to draw. Set by the view model when a render lands.
     private(set) var texture: MTLTexture?
 
-    /// The transform to apply on the way to the screen.
-    ///
-    /// The engine renders in the ProPhoto working space but applies the
-    /// output CCTF on write (`io.output_cctf_encoding = true`, and
-    /// `cctf_mode_for("ProPhoto RGB") == 1`), so the texture is
-    /// **gamma-encoded ProPhoto** -- not linear.
-    ///
-    /// The two modes are therefore different, and they are the engine's own
-    /// numbering (`shaders/nodes.metal`):
-    ///
-    ///   * source mode 1 -- ProPhoto RGB: a gamma of 1.8 with a 16x linear
-    ///     toe. Decoding the texture means undoing *that*.
-    ///   * target mode 0 -- sRGB: the display's own curve, a gamma of 2.4
-    ///     with a 12.92 slope.
-    ///
-    /// Using sRGB's curve to read ProPhoto's data (or the other way round)
-    /// looks almost right, which is exactly why it has to be right.
-    ///
-    /// The matrix is `proPhotoToSRGBLinear`: linear ProPhoto to linear sRGB,
-    /// the same one the export path uses, so the screen and the saved file
-    /// agree.
-    var transform: OutputTransform = OutputTransform(
-        matrix: ImageDecoder.proPhotoToSRGBLinear,
-        sourceCCTFMode: 1,
-        targetCCTFMode: 0,
-        gamutCompressConsts: [],
-        gamutCompressActive: false)
+    /// The iOS engine is configured with the same sRGB output as the desktop
+    /// preview host. The canvas must not apply a second ProPhoto transform.
+    var transform: OutputTransform = .identity
 
     /// The transform's parameters, uploaded to the GPU once per change.
     private var transformBuffer: MTLBuffer?
     private var sourceAspect: CGFloat?
+    private var drawableAspect: CGFloat = 2.0 / 3.0
+    private var zoom: CGFloat = 1
+    private var pan = CGPoint.zero
 
     init?(device: MTLDevice) {
         guard let queue = device.makeCommandQueue() else { return nil }
@@ -139,6 +108,16 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
         uploadTransform()
     }
 
+    /// Update the viewport without changing the rendered pixels. `pan` is in
+    /// view points; it is converted to normalized Metal coordinates here.
+    func setViewport(zoom: CGFloat, pan: CGPoint, size: CGSize) {
+        self.zoom = min(max(zoom, 1), 4)
+        self.pan = CGPoint(x: size.width > 0 ? pan.x * 2 / size.width : 0,
+                           y: size.height > 0 ? -pan.y * 2 / size.height : 0)
+        if size.height > 0 { drawableAspect = size.width / size.height }
+        uploadFrame()
+    }
+
     /// The working space → display transform.
     func setTransform(_ transform: OutputTransform) {
         self.transform = transform
@@ -176,14 +155,11 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
         uploadFrame()
     }
 
-    /// Copy an aspect-preserving source frame to the shader constants.
-    ///
-    /// The destination frame in the current layout is 2:3. The four values are
-    /// written after the packed transform, at a fixed 16-byte offset; the
-    /// shader reads them as one `float4`.
+    /// Copy an aspect-preserving source frame to the shader constants. The
+    /// actual MTKView aspect is used, so portrait, landscape and square photos
+    /// all fit instead of being sampled through a fixed 2:3 window.
     private func uploadFrame() {
         guard let transformBuffer, let aspect = sourceAspect, aspect > 0 else { return }
-        let drawableAspect = 2.0 / 3.0
         var width = CGFloat(1)
         var height = CGFloat(1)
         if aspect > drawableAspect {
@@ -191,19 +167,32 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
         } else {
             height = aspect / drawableAspect
         }
-        let frame = SIMD4<Float>(Float(-width / 2), Float(width / 2),
-                                 Float(-height / 2), Float(height / 2))
+        width *= zoom
+        height *= zoom
+        let frame = SIMD4<Float>(Float(pan.x - width / 2), Float(pan.x + width / 2),
+                                 Float(pan.y - height / 2), Float(pan.y + height / 2))
         withUnsafeBytes(of: frame) { bytes in
-            transformBuffer.contents().advanced(by: 16)
+            transformBuffer.contents().advanced(by: Self.frameBufferOffset)
                 .copyMemory(from: bytes.baseAddress!, byteCount: bytes.count)
         }
     }
 
     // MARK: - MTKViewDelegate
 
-    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        guard size.height > 0 else { return }
+        drawableAspect = size.width / size.height
+        uploadFrame()
+    }
 
     func draw(in view: MTKView) {
+        if view.drawableSize.height > 0 {
+            let aspect = view.drawableSize.width / view.drawableSize.height
+            if abs(aspect - drawableAspect) > 0.001 {
+                drawableAspect = aspect
+                uploadFrame()
+            }
+        }
         guard let drawable = view.currentDrawable,
               let descriptor = view.currentRenderPassDescriptor,
               let texture,
@@ -215,7 +204,7 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
         encoder.setFragmentTexture(texture, index: 0)
         if let transformBuffer {
             encoder.setFragmentBuffer(transformBuffer, offset: 0, index: 0)
-            encoder.setFragmentBuffer(transformBuffer, offset: 16, index: 1)
+            encoder.setFragmentBuffer(transformBuffer, offset: Self.frameBufferOffset, index: 1)
         }
         // A full-screen triangle: three vertices, no vertex buffer, no index
         // buffer. The vertex shader positions them from `vertex_id`.

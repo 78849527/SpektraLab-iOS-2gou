@@ -80,6 +80,12 @@ enum ImageDecoder {
     /// for a result nobody sees. The export path decodes at full size.
     static let previewLongEdge = 2048
 
+    /// A safe export ceiling. A full-resolution ARW render keeps the negative,
+    /// print buffers and result texture alive at the same time. On iOS that
+    /// can exceed the jetsam limit before Swift gets a chance to throw. 3840
+    /// px still gives a detailed 3:2 JPEG while keeping the peak predictable.
+    static let exportLongEdge = 3840
+
     /// The colour space the pixel conversion below assumes. Core Image RAW
     /// rendering is allowed to choose a wide-gamut output (for example Display
     /// P3) unless the caller pins it. `CIRAWFilter.outputImage` does not
@@ -99,6 +105,18 @@ enum ImageDecoder {
         // support depends on the format and on the iOS version. For anything
         // that is not RAW this returns nil and the path below runs unchanged.
         if let raw = CIRAWFilter(imageData: data) {
+            // Core Image defaults are designed for a finished photograph and
+            // may apply a baseline exposure, global tone curve and local tone
+            // mapping. The desktop LibRaw path is linear and has no automatic
+            // brightening, so those defaults make the same RAW look clipped.
+            raw.exposure = 0
+            raw.baselineExposure = 0
+            raw.shadowBias = 0
+            raw.boostAmount = 0
+            raw.boostShadowAmount = 0
+            raw.localToneMapAmount = 0
+            raw.extendedDynamicRangeAmount = 0
+            raw.isGamutMappingEnabled = false
             // Some iOS versions expose CIRAWFilter's tunable properties
             // (`scaleFactor` among them) to Swift without implementing their
             // setters. Touching them raises an Objective-C
@@ -128,10 +146,8 @@ enum ImageDecoder {
 
     /// Decode an image from a file URL.
     static func decode(url: URL, maxLongEdge: Int?) throws -> DecodedFrame {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
-            throw DecodeError.unreadable("\(url.lastPathComponent) could not be opened")
-        }
-        return try decode(source: source, maxLongEdge: maxLongEdge)
+        let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+        return try decode(data: data, maxLongEdge: maxLongEdge)
     }
 
     /// Decode an image from a `CGImage` — what the Photos picker hands back.

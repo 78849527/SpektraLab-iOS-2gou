@@ -39,6 +39,7 @@
 			path = "Model";
 			sourceTree = "<group>";
 		};
+		DB4A69182F62F25C0AEBC961 /* Resources */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources; sourceTree = "<group>"; };
 		E726C6EED977FC546A55E678 /* CrashLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CrashLog.swift"; sourceTree = "<group>"; };
 		AA0C4AC58357578FABC8BD73 /* EngineBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EngineBridge.swift"; sourceTree = "<group>"; };
 		23E72355523F1F85756E886C /* SpektraLab-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "SpektraLab-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -63,6 +64,7 @@
 				82BC613FBF20D36E130F8DB1 /* Canvas */,
 				CB77A531F6BDF61993E7E131 /* Import */,
 				8DC45243D2F7398E45C0638F /* Model */,
+				DB4A69182F62F25C0AEBC961 /* Resources */,
 				291542805F9C50034FBB2D47 /* Service */,
 				A3683B4388735BD2619A86E7 /* ContentView.swift */,
 				AC1103EAAEEF5ACAFDF57005 /* Info.plist */,
@@ -267,6 +269,20 @@
 			shellPath = /bin/sh;
 			shellScript = "\"$SRCROOT/Tools/check-engine-resources.sh\"\n";
 		};
+		E3B433188A79901C6FBE1B60 /* Sign Metal library */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Sign Metal library";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "app=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nif [ -n \"$EXPANDED_CODE_SIGN_IDENTITY\" ]; then\n	find \"$app\" -type f -print0 | while IFS= read -r -d \"\0\" code; do\n		/usr/bin/codesign --force --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" --timestamp=none \"$code\"\n	done\nfi\n";
+		};
 		967DE5DAE8F9C3546488D3FD /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -384,7 +400,8 @@
 				20A1F637DF0C8F92FA52C1DD,
 				AB6F1305312B9996E2538FF8,
 				AA9A663971E63899B42E7E70,
-				C831EECBAB01524E02C71B42
+				C831EECBAB01524E02C71B42,
+				E3B433188A79901C6FBE1B60
 			);
 			buildRules = (
 			);

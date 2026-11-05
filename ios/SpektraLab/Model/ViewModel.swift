@@ -18,6 +18,7 @@ import Photos
 import PhotosUI
 import UIKit
 import UniformTypeIdentifiers
+import ImageIO
 
 @MainActor
 final class ViewModel: ObservableObject {
@@ -65,9 +66,6 @@ final class ViewModel: ObservableObject {
     /// The stocks, in the order the scrolling strip shows them.
     var films: [Stock] { catalog.films + catalog.slides }
     var papers: [Stock] { catalog.papers }
-
-    /// A small square of the picked photo, for the strip's tiles.
-    @Published private(set) var thumbnail: UIImage?
 
     /// Enough state to diagnose an engine failure without a debugger.
     var diagnostics: String {
@@ -181,25 +179,6 @@ final class ViewModel: ObservableObject {
         return try await item.loadTransferable(type: Data.self) ?? Data()
     }
 
-    /// A bounded centre crop of the picked image, for the filter strip.
-    ///
-    /// Made from the original file bytes rather than the decoded float frame:
-    /// the frame is linear ProPhoto, which a UIImage would show incorrectly.
-    private static func squareThumbnail(from data: Data) -> UIImage? {
-        guard let image = UIImage(data: data) else { return nil }
-        let side: CGFloat = 160
-        let w = image.size.width, h = image.size.height
-        guard w > 0, h > 0 else { return nil }
-        let scale = side / min(w, h)
-        let drawn = CGSize(width: w * scale, height: h * scale)
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side))
-        return renderer.image { _ in
-            image.draw(in: CGRect(x: (side - drawn.width) / 2,
-                                 y: (side - drawn.height) / 2,
-                                 width: drawn.width, height: drawn.height))
-        }
-    }
-
     /// Take a photo from the library.
     func importPicked(_ item: PhotosPickerItem?) async {
         guard let item else { return }
@@ -212,18 +191,40 @@ final class ViewModel: ObservableObject {
             guard !data.isEmpty else {
                 throw DecodeError.unreadable("照片没有返回数据")
             }
-            originalData = data
-            // The preview decode is small: the live tier renders at 2048 px on
-            // the long edge, so a bigger decode buys nothing and costs
-            // seconds and hundreds of megabytes.
-            let decoded = try ImageDecoder.decode(data: data, maxLongEdge: ImageDecoder.previewLongEdge)
-            thumbnail = Self.squareThumbnail(from: data)
-            try await loadFrame(decoded)
-            statusText = "已载入 \(decoded.width)×\(decoded.height) · \(String(format: "%.1f", decoded.megapixels)) MP"
+            try await importData(data)
         } catch {
             state = .failed(error.localizedDescription)
             statusText = "导入失败"
         }
+    }
+
+    /// Import a file selected from Files. This path is essential for Sony
+    /// ARW: PhotosPicker may expose only a rendered preview for some RAW
+    /// assets, while a security-scoped file URL gives Core Image the original
+    /// container and its maker metadata.
+    func importFile(from url: URL) async {
+        state = .importing
+        statusText = "正在读取原始文件…"
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+            guard !data.isEmpty else { throw DecodeError.unreadable("文件为空") }
+            try await importData(data)
+        } catch {
+            state = .failed(error.localizedDescription)
+            statusText = "导入失败：\(url.lastPathComponent)"
+        }
+    }
+
+    private func importData(_ data: Data) async throws {
+        originalData = data
+        // The preview decode is small: the live tier renders at 2048 px on
+        // the long edge, so a bigger decode buys nothing and costs memory.
+        let decoded = try ImageDecoder.decode(data: data,
+                                              maxLongEdge: ImageDecoder.previewLongEdge)
+        try await loadFrame(decoded)
+        statusText = "已载入 \(decoded.width)×\(decoded.height) · \(String(format: "%.1f", decoded.megapixels)) MP"
     }
 
     /// Load an already-decoded frame: open a session and render the first
@@ -399,43 +400,51 @@ final class ViewModel: ObservableObject {
 
     /// Export the print to the photo library.
     ///
-    /// The export is a `full` tier render — the original resolution — decoded
-    /// from the original file rather than the preview, so the exported file
-    /// is as large as the photo was.
+    /// The export is a `full` tier render decoded from the original file at a
+    /// phone-safe 3840 px long edge. It keeps RAW quality without retaining a
+    /// 24–60 MP float frame and all engine intermediates at once.
     func exportToPhotos() async {
         guard let engine, let originalData else {
             statusText = "还没有可导出的照片"
             return
         }
         state = .importing
-        statusText = "正在导出原始分辨率…"
+        statusText = "正在导出高质量 JPEG…"
 
         do {
-            let full = try ImageDecoder.decode(data: originalData, maxLongEdge: nil)
+            // Keep the large decoded frame in a tight scope. The engine copies
+            // it during `open`; retaining it while reading the rendered GPU
+            // texture back was enough to jetsam a phone on 24–26 MP ARW files.
+            let result: RenderResult
+            do {
+                let full = try ImageDecoder.decode(data: originalData,
+                                                   maxLongEdge: ImageDecoder.exportLongEdge)
 
-            // Reopen on the full frame, with the same stocks and parameters.
-            var delta = ParamDefaults.delta(film: filmStock, paper: printStock)
-            for (key, value) in params { delta[key] = .number(value) }
-            // The pointer has to outlive the call: the engine borrows the
-            // pixels for the duration of `open` and copies what it keeps.
-            try full.pixels.withUnsafeBufferPointer { buffer in
-                guard let base = buffer.baseAddress else {
-                    throw EngineError.failed(status: -1, message: "解码结果为空")
+                // Reopen on the export frame with the same stocks and parameters.
+                var delta = ParamDefaults.delta(film: filmStock, paper: printStock)
+                for (key, value) in params { delta[key] = .number(value) }
+                try full.pixels.withUnsafeBufferPointer { buffer in
+                    guard let base = buffer.baseAddress else {
+                        throw EngineError.failed(status: -1, message: "解码结果为空")
+                    }
+                    _ = try engine.open(pixels: EnginePixels(
+                        data: base,
+                        width: full.width,
+                        height: full.height), params: delta)
                 }
-                _ = try engine.open(pixels: EnginePixels(
-                    data: base,
-                    width: full.width,
-                    height: full.height), params: delta)
+                try engine.solve(target: "both")
+                result = try engine.render(tier: "full", reprint: false)
             }
-            try engine.solve(target: "both")
-
-            let result = try engine.render(tier: "full", reprint: false)
             guard let texture = result.texture else {
                 throw EngineError.failed(status: -1, message: "引擎没有返回图像")
             }
 
-            let image = try await Self.makeImage(from: texture, rowStridePx: result.rowStridePx)
-            try await PhotoLibrary.saveJPEG(image)
+            // Write the JPEG directly to a temporary file. Building a UIImage
+            // and then calling jpegData() creates another full-size copy and
+            // was enough to terminate the app under memory pressure.
+            let jpegURL = try await Self.writeJPEG(from: texture,
+                                                    rowStridePx: result.rowStridePx)
+            try await PhotoLibrary.saveJPEG(at: jpegURL)
 
             statusText = String(format: "已导出 %d×%d 到相册", result.width, result.height)
             state = .ready
@@ -445,12 +454,11 @@ final class ViewModel: ObservableObject {
         }
     }
 
-    /// The engine's texture → a `UIImage`, in sRGB.
+    /// The engine's texture → a JPEG file, in sRGB.
     ///
-    /// The texture is gamma-encoded ProPhoto RGB, `RGBA16Unorm` (the engine
-    /// applies `output_cctf_encoding` with `cctf_mode_for("ProPhoto RGB") == 1`);
-    /// the file has to be sRGB, so the conversion happens here:
-    /// ProPhoto → linear sRGB → sRGB-encoded 8-bit.
+    /// The texture is sRGB-encoded `RGBA16Unorm`, matching the desktop
+    /// preview host. The file is also an sRGB JPEG, so this step only reduces
+    /// 16-bit code values to 8-bit without another colour conversion.
     ///
     /// The row offset is `y * rowStridePx * 4` **uint16s** in the *engine's*
     /// own linear memory — but a private texture has no CPU-visible memory, so
@@ -458,83 +466,50 @@ final class ViewModel: ObservableObject {
     /// blit packs `width` pixels per row, so the buffer is addressed by
     /// `y * width + x` (the engine's `rowStridePx` pitch is irrelevant here).
     @MainActor
-    private static func makeImage(from texture: MTLTexture, rowStridePx: Int) async throws -> UIImage {
+    private static func writeJPEG(from texture: MTLTexture, rowStridePx: Int) async throws -> URL {
         let width = texture.width
         let height = texture.height
-        let bytesPerPixel = 4 * MemoryLayout<UInt16>.size   // RGBA16 = 8 bytes
-        let bytesPerRow = width * bytesPerPixel
-
-        // 1) Read the private texture back to the CPU. A private-storage
-        //    texture cannot be read with `contents()`/`getBytes` — the only
-        //    supported path is a blit into a shared `MTLBuffer`.
-        //    REQUIRES the engine to have created the texture with
-        //    `MTLTextureUsageCopySource`; otherwise this fails at runtime.
-        guard let buffer = texture.device.makeBuffer(length: bytesPerRow * height,
-                                                     options: .storageModeShared) else {
-            throw EngineError.failed(status: -1, message: "无法分配回读缓冲")
-        }
-        guard let commandBuffer = texture.device.makeCommandQueue()?.makeCommandBuffer(),
-              let blit = commandBuffer.makeBlitCommandEncoder() else {
-            throw EngineError.failed(status: -1, message: "无法创建 blit 编码器")
-        }
-        blit.copy(from: texture,
-                  sourceSlice: 0, sourceLevel: 0,
-                  sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                  sourceSize: MTLSize(width: width, height: height, depth: 1),
-                  to: buffer,
-                  destinationOffset: 0,
-                  destinationBytesPerRow: bytesPerRow,
-                  destinationBytesPerImage: 0)
-        blit.endEncoding()
-        commandBuffer.commit()
-        try await withCheckedThrowingContinuation { continuation in
-            commandBuffer.addCompletedHandler { _ in
-                continuation.resume()
-            }
+        guard width > 0, height > 0,
+              texture.pixelFormat == .rgba16Unorm else {
+            throw ExportError.encodingFailed
         }
 
-        // 2) Per-pixel RGBA16 uint16 data, now on the CPU (tightly packed).
-        //    `contents()` on a shared buffer is non-optional, so there is
-        //    nothing to unwrap.
-        let src = buffer.contents().assumingMemoryBound(to: UInt16.self)
+        // Read only a small number of rows at a time. The engine's result is a
+        // shared, buffer-backed texture, so getBytes() copies it directly and
+        // avoids a second full-size Metal buffer and a command-buffer wait.
+        let tileRows = 128
+        let sourceBytesPerRow = width * 4 * MemoryLayout<UInt16>.size
+        var source = [UInt16](repeating: 0, count: width * tileRows * 4)
 
-        // 3) RGBA16Unorm → Float → linear ProPhoto → linear sRGB → sRGB 8-bit.
-        //    The engine renders in the ProPhoto working space but applies the
-        //    output CCTF on write (`io.output_cctf_encoding = true`,
-        //    `cctf_mode_for("ProPhoto RGB") == 1`), so the stored values are
-        //    **gamma-encoded** ProPhoto, not linear. Recover linear ProPhoto
-        //    first, with the inverse of *ProPhoto's* curve -- a gamma of 1.8
-        //    with a 16x linear toe, which is what `nodes.metal`'s mode 1 is.
-        //    Skipping this step double-encodes and crushes the image to
-        //    near-black; using sRGB's curve instead of ProPhoto's shifts the
-        //    midtones, which is quieter but just as wrong.
-        var out = [UInt8](repeating: 0, count: width * height * 4)
-        let m = ImageDecoder.proPhotoToSRGBLinear
-        out.withUnsafeMutableBufferPointer { dst in
-            for y in 0..<height {
-                for x in 0..<width {
-                    let si = (y * width + x) * 4
-                    let di = si
-                    let encR = Float(src[si + 0]) / 65535.0
-                    let encG = Float(src[si + 1]) / 65535.0
-                    let encB = Float(src[si + 2]) / 65535.0
-                    let r = ImageDecoder.proPhotoToLinear(encR)
-                    let g = ImageDecoder.proPhotoToLinear(encG)
-                    let b = ImageDecoder.proPhotoToLinear(encB)
-                    let lr = m[0] * r + m[1] * g + m[2] * b
-                    let lg = m[3] * r + m[4] * g + m[5] * b
-                    let lb = m[6] * r + m[7] * g + m[8] * b
-                    dst[di + 0] = ImageDecoder.linearToSrgb(lr)
-                    dst[di + 1] = ImageDecoder.linearToSrgb(lg)
-                    dst[di + 2] = ImageDecoder.linearToSrgb(lb)
-                    dst[di + 3] = 255
+        // 1) Gamma-encoded sRGB RGBA16Unorm → gamma-encoded sRGB RGBA8.
+        // Keep one 8-bit RGBA image because CGImageDestination accepts a
+        // CGImage, but do not also create a UIImage or an in-memory JPEG Data.
+        var out = Data(count: width * height * 4)
+        out.withUnsafeMutableBytes { dstRaw in
+            guard let dst = dstRaw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+            for y0 in stride(from: 0, to: height, by: tileRows) {
+                let rows = min(tileRows, height - y0)
+                source.withUnsafeMutableBytes { sourceRaw in
+                    texture.getBytes(sourceRaw.baseAddress!,
+                                     bytesPerRow: sourceBytesPerRow,
+                                     from: MTLRegionMake2D(0, y0, width, rows),
+                                     mipmapLevel: 0)
+                }
+                for row in 0..<rows {
+                    for x in 0..<width {
+                        let si = (row * width + x) * 4
+                        let di = ((y0 + row) * width + x) * 4
+                        dst[di + 0] = UInt8((UInt32(source[si + 0]) + 128) / 257)
+                        dst[di + 1] = UInt8((UInt32(source[si + 1]) + 128) / 257)
+                        dst[di + 2] = UInt8((UInt32(source[si + 2]) + 128) / 257)
+                        dst[di + 3] = 255
+                    }
                 }
             }
         }
 
-        // 4) An 8-bit sRGB CGImage (already transfer-encoded; colour space sRGB).
-        let data = Data(bytes: out, count: out.count)
-        guard let provider = CGDataProvider(data: data as CFData) else {
+        // 2) An 8-bit sRGB CGImage (already transfer-encoded; colour space sRGB).
+        guard let provider = CGDataProvider(data: out as CFData) else {
             throw EngineError.failed(status: -1, message: "无法构造数据提供器")
         }
         guard let cgImage = CGImage(width: width, height: height,
@@ -547,7 +522,22 @@ final class ViewModel: ObservableObject {
                                     intent: .defaultIntent) else {
             throw EngineError.failed(status: -1, message: "无法构造图像")
         }
-        return UIImage(cgImage: cgImage)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SpektraLab-\(UUID().uuidString).jpg")
+        guard let destination = CGImageDestinationCreateWithURL(url as CFURL,
+                                                                 UTType.jpeg.identifier as CFString,
+                                                                 1, nil) else {
+            throw ExportError.encodingFailed
+        }
+        let properties: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: 0.92
+        ]
+        CGImageDestinationAddImage(destination, cgImage, properties as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else {
+            try? FileManager.default.removeItem(at: url)
+            throw ExportError.encodingFailed
+        }
+        return url
     }
 
 }
@@ -571,20 +561,10 @@ struct PickedImageData: Transferable {
 /// Saving to the photo library, with the permission the app needs.
 enum PhotoLibrary {
     /// Ask for permission and save.
-    static func saveJPEG(_ image: UIImage) async throws {
+    static func saveJPEG(at url: URL) async throws {
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else {
             throw ExportError.permissionDenied
-        }
-        guard let data = image.jpegData(compressionQuality: 0.92) else {
-            throw ExportError.encodingFailed
-        }
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SpektraLab-\(UUID().uuidString).jpg")
-        do {
-            try data.write(to: url, options: [.atomic])
-        } catch {
-            throw ExportError.encodingFailed
         }
         defer { try? FileManager.default.removeItem(at: url) }
         try await PHPhotoLibrary.shared().performChanges {

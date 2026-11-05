@@ -169,6 +169,13 @@ final class SpektraEngine {
            let unpacked = unpackBundledResources(archive) {
             return unpacked
         }
+        // Development installs keep the large archive outside the .app so
+        // CoreDevice can install the bundle reliably. This also makes a
+        // previously downloaded archive survive app updates.
+        if let archive = cachedArchiveURL(),
+           let unpacked = unpackBundledResources(archive) {
+            return unpacked
+        }
         // A build that skipped `ios/Tools/build-engine.sh bundle` lands here,
         // and the error the caller reports names this path.
         return Bundle.main.bundleURL.appending(path: "Resources/engine")
@@ -190,6 +197,10 @@ final class SpektraEngine {
     /// - Throws: `EngineError.noResources` when the download fails or the
     ///   archive cannot be unpacked.
     static func fetchResourcesRemotely() async throws -> URL {
+        if let archive = cachedArchiveURL(),
+           let unpacked = unpackBundledResources(archive) {
+            return unpacked
+        }
         let (archive, response) = try await URLSession.shared.download(from: remoteAssets)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             throw EngineError.noResources("资源下载失败（HTTP \(http.statusCode)）")
@@ -198,6 +209,15 @@ final class SpektraEngine {
             throw EngineError.noResources("资源包无法解开")
         }
         return directory
+    }
+
+    private static func cachedArchiveURL() -> URL? {
+        guard let caches = FileManager.default.urls(for: .cachesDirectory,
+                                                     in: .userDomainMask).first else {
+            return nil
+        }
+        let archive = caches.appendingPathComponent("engine-assets.bin")
+        return FileManager.default.fileExists(atPath: archive.path) ? archive : nil
     }
 
     /// Unpacks `engine-assets.bin` into Caches on first launch.

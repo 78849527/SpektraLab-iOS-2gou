@@ -3,9 +3,9 @@
 #  build-engine.sh — the engine's Metal kernels and its baked resources, for iOS.
 #
 #  Usage:
-#      ios/Tools/build-engine.sh bundle      # kernels + resources (what a build needs)
-#      ios/Tools/build-engine.sh metallib    # kernels only
-#      ios/Tools/build-engine.sh resources    # baked resources only
+#      ios/Tools/build-engine.sh bundle [device|simulator]
+#      ios/Tools/build-engine.sh metallib
+#      ios/Tools/build-engine.sh resources [device|simulator]
 #
 #  Two things happen here, and both matter.
 #
@@ -49,10 +49,11 @@ TARGET_FLAGS=(-mios-version-min="$IOS_MIN")
 build_metallib() {
   local src="$engine/src/shaders"
   local out="$engine/build/ios"
+  local sim_sdk="iphonesimulator"
   local air_dir="$out/air"
   mkdir -p "$air_dir"
 
-  echo "==> compiling Metal kernels for iOS ($IOS_MIN)"
+  echo "==> compiling Metal kernels for iOS device ($IOS_MIN)"
   local airs=()
   for m in "$src"/*.metal; do
     local name
@@ -66,12 +67,36 @@ build_metallib() {
   echo "==> linking spektrafilm.metallib"
   xcrun -sdk iphoneos metallib "${airs[@]}" -o "$out/spektrafilm.metallib"
 
-  # `build_resources` packs this into the app's single resource archive, so
-  # nothing is copied into the bundle from here.
+  local sim_air_dir="$out/air-simulator"
+  mkdir -p "$sim_air_dir"
+  local sim_airs=()
+  echo "==> compiling Metal kernels for iOS simulator ($IOS_MIN)"
+  for m in "$src"/*.metal; do
+    local name
+    name="$(basename "$m" .metal)"
+    echo "    $(basename "$m")"
+    xcrun -sdk "$sim_sdk" metal "${MATH_FLAGS[@]}" \
+      "--target=air64-apple-ios${IOS_MIN}-simulator" \
+      -Werror -c "$m" -o "$sim_air_dir/$name.air"
+    sim_airs+=("$sim_air_dir/$name.air")
+  done
+  echo "==> linking spektrafilm-simulator.metallib"
+  xcrun -sdk "$sim_sdk" metallib "${sim_airs[@]}" -o "$out/spektrafilm-simulator.metallib"
+
+  # `build_resources` selects the matching library when it packs the app
+  # archive. Keep both products: a device metallib cannot be loaded by the
+  # simulator, and silently choosing whichever was built last is fragile.
   echo "    -> $out/spektrafilm.metallib"
+  echo "    -> $out/spektrafilm-simulator.metallib"
 }
 
 build_resources() {
+  local platform="${1:-device}"
+  case "$platform" in
+    device) local metallib="$engine/build/ios/spektrafilm.metallib" ;;
+    simulator) local metallib="$engine/build/ios/spektrafilm-simulator.metallib" ;;
+    *) echo "platform must be device or simulator" >&2; exit 2 ;;
+  esac
   local src="$engine/resources"
   local product="$engine/resources_product"
   local out="$engine/build/ios"
@@ -92,10 +117,12 @@ build_resources() {
   cp "$src/print_luts.json" "$staging/"
   cp "$src/neutral_print_filters.json" "$staging/"
 
-  # The kernels, when `build_metallib` has already run.
-  if [ -f "$out/spektrafilm.metallib" ]; then
-    cp "$out/spektrafilm.metallib" "$staging/"
+  # Pick the library for the same platform as the app being built.
+  if [ ! -f "$metallib" ]; then
+    echo "missing $metallib; run ios/Tools/build-engine.sh metallib first" >&2
+    exit 1
   fi
+  cp "$metallib" "$staging/spektrafilm.metallib"
 
   # The stock profiles. The engine resolves a stock by name against
   # `<resources>/profiles/<stock>.json`, so both directories' profiles are
@@ -145,8 +172,8 @@ check_resources() {
 
 case "${1:-bundle}" in
   metallib)  build_metallib ;;
-  resources) build_resources ;;
-  bundle)    build_metallib; build_resources ;;
+  resources) build_resources "${2:-device}" ;;
+  bundle)    build_metallib; build_resources "${2:-device}" ;;
   check)     check_resources ;;
   *) echo "usage: $0 {bundle|metallib|resources|check}" >&2; exit 2 ;;
 esac

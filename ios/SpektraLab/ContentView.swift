@@ -15,6 +15,7 @@ import SwiftUI
 import PhotosUI
 import MetalKit
 import UIKit
+import UniformTypeIdentifiers
 
 private extension Color {
     static var labInk: Color { Color(red: 0.055, green: 0.055, blue: 0.063) }
@@ -27,9 +28,14 @@ struct ContentView: View {
     @EnvironmentObject private var model: ViewModel
     @State private var pickerItem: PhotosPickerItem?
     @State private var showingExport = false
+    @State private var showingFileImporter = false
     @State private var showingDiagnostics = false
     @State private var hiddenError: String?
     @State private var deck: Deck = .film
+    @State private var zoom: CGFloat = 1
+    @State private var savedZoom: CGFloat = 1
+    @State private var pan = CGSize.zero
+    @State private var savedPan = CGSize.zero
 
     private enum Deck: String, CaseIterable, Identifiable, Equatable {
         case film = "胶片"
@@ -61,9 +67,17 @@ struct ContentView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("以原始分辨率重新渲染并保存到相册。")
+            Text("以手机安全尺寸重新渲染为 JPEG 并保存到相册。")
         }
         .sheet(isPresented: $showingDiagnostics) { diagnosticsSheet }
+        .fileImporter(isPresented: $showingFileImporter,
+                      allowedContentTypes: [.image, .rawImage],
+                      allowsMultipleSelection: false) { result in
+            guard case .success(let urls) = result, let url = urls.first else { return }
+            Task { @MainActor in
+                await model.importFile(from: url)
+            }
+        }
     }
 
     // MARK: - top bar
@@ -76,17 +90,18 @@ struct ContentView: View {
                     .frame(width: 38, height: 38)
                     .glassEffect(.regular, in: Circle())
             }
-            Spacer()
-            VStack(spacing: 2) {
-                Text("SpektraLab")
-                    .font(.system(size: 15, weight: .semibold))
-                    .tracking(0.4)
-                    .foregroundStyle(Color.labCream)
-                Text("SPECTRAL FILM LAB")
-                    .font(.system(size: 8, weight: .medium))
-                    .tracking(1.8)
-                    .foregroundStyle(.secondary)
+            .contextMenu {
+                Button {
+                    showingFileImporter = true
+                } label: {
+                    Label("从文件导入 RAW / JPEG", systemImage: "folder")
+                }
             }
+            Spacer()
+            Text("SpektraLab")
+                .font(.system(size: 15, weight: .semibold))
+                .tracking(0.4)
+                .foregroundStyle(Color.labCream)
             Spacer()
             Button {
                 showingExport = true
@@ -100,12 +115,11 @@ struct ContentView: View {
             .opacity(model.renderedTexture == nil ? 0.4 : 1)
         }
         .tint(Color.labRed)
-        .frame(minHeight: 56)
-        .padding(.horizontal, 16)
-        .background(.ultraThinMaterial)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
-        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 44)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .padding(.top, 6)
+        .padding(.horizontal, 10)
     }
 
     // MARK: - the picture
@@ -113,16 +127,49 @@ struct ContentView: View {
     private var picture: some View {
         ZStack {
             if model.renderedTexture != nil {
-                MetalCanvas(renderer: model.renderer, texture: model.renderedTexture)
+                MetalCanvas(renderer: model.renderer,
+                            texture: model.renderedTexture,
+                            zoom: zoom,
+                            pan: pan)
                     // MTLTexture is not Hashable; the engine's progress id is
                     // what tells SwiftUI the picture changed.
                     .id(model.renderIdentity)
+                    .simultaneousGesture(imageGestures)
+                    .onTapGesture(count: 2) {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            zoom = 1
+                            savedZoom = 1
+                            pan = .zero
+                            savedPan = .zero
+                        }
+                    }
             } else {
                 emptyState
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
+    }
+
+    private var imageGestures: some Gesture {
+        SimultaneousGesture(
+            MagnificationGesture()
+                .onChanged { value in
+                    zoom = min(max(savedZoom * value, 1), 4)
+                    if zoom <= 1 { pan = .zero }
+                }
+                .onEnded { _ in
+                    savedZoom = zoom
+                    if zoom <= 1 { savedPan = .zero }
+                },
+            DragGesture(minimumDistance: 4)
+                .onChanged { value in
+                    guard zoom > 1 else { return }
+                    pan = CGSize(width: savedPan.width + value.translation.width,
+                                 height: savedPan.height + value.translation.height)
+                }
+                .onEnded { _ in savedPan = pan }
+        )
     }
 
     private var emptyState: some View {
@@ -153,6 +200,13 @@ struct ContentView: View {
                     .foregroundStyle(Color.white)
             }
             .padding(.top, 4)
+            Button {
+                showingFileImporter = true
+            } label: {
+                Label("从文件导入 Sony ARW / RAW", systemImage: "folder.badge.plus")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(Color.labRed)
+            }
             Text("\(model.films.count) PROFILES  ·  \(model.papers.count) PAPERS")
                 .font(.caption2.weight(.medium))
                 .tracking(1.2)
@@ -222,7 +276,6 @@ struct ContentView: View {
             LazyHStack(spacing: 10) {
                 ForEach(stocks) { stock in
                     StockTile(stock: stock,
-                              photo: model.thumbnail,
                               selected: stock.id == selected) {
                         pick(stock.id)
                     }
@@ -384,6 +437,8 @@ struct ContentView: View {
 struct MetalCanvas: UIViewRepresentable {
     let renderer: CanvasRenderer?
     let texture: MTLTexture?
+    let zoom: CGFloat
+    let pan: CGSize
 
     func makeUIView(context: Context) -> MTKView {
         let view = MTKView()
@@ -400,6 +455,9 @@ struct MetalCanvas: UIViewRepresentable {
 
     func updateUIView(_ view: MTKView, context: Context) {
         renderer?.setTexture(texture)
+        renderer?.setViewport(zoom: zoom,
+                              pan: CGPoint(x: pan.width, y: pan.height),
+                              size: view.bounds.size)
         view.setNeedsDisplay()
     }
 
@@ -456,7 +514,6 @@ struct ParamSlider: View {
 /// navigation cue: the picture itself is always rendered by the engine.
 struct StockTile: View {
     let stock: Stock
-    let photo: UIImage?
     let selected: Bool
     let action: () -> Void
 
@@ -464,16 +521,18 @@ struct StockTile: View {
         Button(action: action) {
             VStack(spacing: 6) {
                 ZStack {
-                    if let photo {
-                        Image(uiImage: photo)
-                            .resizable()
-                            .scaledToFill()
-                    } else {
-                        Color.white.opacity(0.08)
-                    }
-                    Rectangle()
-                        .fill(swatch.opacity(0.20))
-                        .allowsHitTesting(false)
+                    LinearGradient(colors: [swatch.opacity(0.88), swatch.opacity(0.34)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                    Image(systemName: stock.support == .film ? "film.stack" : "photo.stack")
+                        .font(.system(size: 25, weight: .light))
+                        .foregroundStyle(Color.white.opacity(0.88))
+                    Text(shortCode)
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .tracking(0.4)
+                        .foregroundStyle(Color.white.opacity(0.9))
+                        .padding(4)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity,
+                               alignment: .bottomLeading)
                 }
                 .frame(width: 62, height: 62)
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
@@ -517,5 +576,16 @@ struct StockTile: View {
         return Color(hue: hue,
                      saturation: paper ? 0.16 : (slide ? 0.55 : 0.38),
                      brightness: 0.88)
+    }
+
+    /// The upstream profiles contain measurements and metadata, but no image
+    /// thumbnails. Use a small generated badge so every stock has a stable,
+    /// recognisable tile instead of reusing the imported photo or showing a
+    /// blank colour square.
+    private var shortCode: String {
+        stock.id.split(separator: "_")
+            .prefix(2)
+            .map { String($0.prefix(1)).uppercased() }
+            .joined()
     }
 }

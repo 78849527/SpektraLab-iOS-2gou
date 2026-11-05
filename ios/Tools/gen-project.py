@@ -67,6 +67,7 @@ BUILD_NUMBER = "1"
 SIGN_IDENTITY = os.environ.get("SPEKTRAFILM_SIGN_IDENTITY", "-")
 TEAM_ID = os.environ.get("SPEKTRAFILM_TEAM_ID", "")
 PROVISIONING_PROFILE = os.environ.get("SPEKTRAFILM_PROVISIONING_PROFILE", "")
+SIGNING_STYLE = os.environ.get("SPEKTRAFILM_SIGNING_STYLE", "Manual")
 
 # The bundle id the provisioning profile is bound to. It has to match the
 # profile exactly -- a profile is issued for one bundle id -- so it is
@@ -214,7 +215,11 @@ def build() -> str:
     # `.png` included: `CFBundleIconFiles` names `AppIcon60x60`, and iOS looks
     # that up as `AppIcon60x60@2x.png` at the bundle root. Without this the
     # staged icons never made it into the .app.
-    is_res = lambda q: q.suffix in (".xcassets", ".png") or q.name == "Resources"
+    # The packed engine archive is downloaded into Caches on first launch.
+    # Keeping the 15 MB archive out of the install bundle is required for
+    # CoreDevice/iOS 27 sideloading; the app bundle remains small and the
+    # archive can be updated independently of the UI binary.
+    is_res = lambda q: q.suffix in (".xcassets", ".png")
     app_sources = phase("PBXSourcesBuildPhase", app_files + engine_files, is_src, "app-sources")
     app_resources = phase("PBXResourcesBuildPhase", app_files, is_res, "app-resources")
     app_frameworks = phase("PBXFrameworksBuildPhase", [], lambda q: False, "app-frameworks")
@@ -254,14 +259,10 @@ def build() -> str:
         # iPhone only, matching the build that installs. `TARGETED_DEVICE_FAMILY`
         # writes UIDeviceFamily into Info.plist and would otherwise override it.
         "TARGETED_DEVICE_FAMILY": '"1"',
-        # Manual for both cases. Automatic signing needs a DEVELOPMENT_TEAM
-        # and an Apple account to choose a certificate; a CI runner with no
-        # signing secrets has neither, and `xcodebuild archive` then fails
-        # validation with "Archive Missing Bundle Identifier". Manual with
-        # CODE_SIGN_IDENTITY "-" is ad-hoc -- no team, no certificate -- and
-        # with real secrets PROVISIONING_PROFILE_SPECIFIER + the named
-        # identity drive it instead.
-        "CODE_SIGN_STYLE": "Manual",
+        # CI stays manual and receives its certificate/profile from the
+        # environment. A developer can opt into Xcode's account-backed
+        # signing with SPEKTRAFILM_SIGNING_STYLE=Automatic.
+        "CODE_SIGN_STYLE": SIGNING_STYLE,
         "CODE_SIGN_IDENTITY": f'"{SIGN_IDENTITY}"',
         "DEVELOPMENT_TEAM": f'"{TEAM_ID}"',
         "CLANG_ENABLE_MODULES": "YES",
@@ -353,13 +354,33 @@ def build() -> str:
           '\n\t\t\tshellScript = "\\"$SRCROOT/Tools/check-engine-resources.sh\\"\\n";'
           '\n\t\t}', "Check engine resources")
 
+    # Xcode 27 emits the app's canvas shader as `default.metallib`. It is a
+    # code object, but the normal app signing pass does not recurse into this
+    # generic Metal library. Sign it after resources are copied and before
+    # Xcode signs the enclosing .app.
+    sign_metal_script = uid("phase:app:sign-metal-library")
+    p.add(sign_metal_script,
+          '{\n\t\t\tisa = PBXShellScriptBuildPhase;\n'
+          '\t\t\tbuildActionMask = 2147483647;\n'
+          '\t\t\tfiles = (\n\t\t\t);\n\t\t\tinputPaths = (\n\t\t\t);\n'
+          '\t\t\tname = "Sign Metal library";\n\t\t\toutputPaths = (\n\t\t\t);\n'
+          '\t\t\trunOnlyForDeploymentPostprocessing = 0;\n'
+          '\t\t\tshellPath = /bin/sh;\n'
+          '\t\t\tshellScript = "app=\\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\\"\\n'
+          'if [ -n \\"$EXPANDED_CODE_SIGN_IDENTITY\\" ]; then\\n'
+          '\tfind \\"$app\\" -type f -print0 | while IFS= read -r -d \\"\\0\\" code; do\\n'
+          '\t\t/usr/bin/codesign --force --sign \\"$EXPANDED_CODE_SIGN_IDENTITY\\" --timestamp=none \\"$code\\"\\n'
+          '\tdone\\n'
+          'fi\\n";\n'
+          '\t\t}', "Sign Metal library")
+
     app_target = uid("target:app")
     project = uid("project")
     p.add(app_target,
           f'{{\n\t\t\tisa = PBXNativeTarget;\n'
           f'\t\t\tbuildConfigurationList = {cfg_list("app", app_cfg)};\n'
           f'\t\t\tbuildPhases = (\n\t\t\t\t{check_script},\n\t\t\t\t{app_sources},\n'
-          f'\t\t\t\t{app_frameworks},\n\t\t\t\t{app_resources}\n\t\t\t);\n'
+          f'\t\t\t\t{app_frameworks},\n\t\t\t\t{app_resources},\n\t\t\t\t{sign_metal_script}\n\t\t\t);\n'
           f'\t\t\tbuildRules = (\n\t\t\t);\n\t\t\tdependencies = (\n\t\t\t);\n'
           f'\t\t\tname = {APP};\n\t\t\tproductName = {APP};\n'
           f'\t\t\tproductReference = {app_product};\n'

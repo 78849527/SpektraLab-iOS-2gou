@@ -5,6 +5,12 @@
 
 ## 一句话现状
 
+> 2026-11-05 补充：当前开发目标已统一为 iOS 27.0 / Xcode 27.2。预览比例、缩放、
+> sRGB 色彩管线、Sony ARW 文件导入入口和分块 JPEG 导出已经完成；真机重新连接后仍需
+> 逐项验证 Sony ARW、Apple RAW/DNG、JPEG、胶片切换、相册写入和导出颜色。Xcode 27
+> 的 simulator Metal 编译必须显式传 `--target=air64-apple-ios27.0-simulator`，否则即使
+> 使用 `iphonesimulator` SDK 也会生成 device metallib。
+
 **CI 已全绿：`Build` → `Package the IPA` → `Publish the IPA` 全部通过，
 每轮 main 上的成功构建会把 IPA 发到一个滚动的 `latest` release，README 顶部有直链。**
 
