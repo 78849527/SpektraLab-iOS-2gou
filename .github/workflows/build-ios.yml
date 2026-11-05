@@ -84,9 +84,21 @@ jobs:
       - name: Select Xcode 27.2
         run: |
           set -euo pipefail
-          sudo xcode-select -s /Applications/Xcode_27.2_Release_Candidate.app/Contents/Developer
-          xcodebuild -version
-          test "$(xcrun -sdk iphoneos --show-sdk-version)" = "27.2"
+          # The macOS runner image changes without notice: one allocation has
+          # Xcode_27.2_Release_Candidate.app, the next only has Xcode.app.
+          # Select by the SDK the build actually needs, not by a fixed path.
+          for candidate in /Applications/Xcode_27.2*.app /Applications/Xcode.app /Applications/Xcode*.app; do
+            [ -d "$candidate/Contents/Developer" ] || continue
+            sudo xcode-select -s "$candidate/Contents/Developer"
+            if [ "$(xcrun -sdk iphoneos --show-sdk-version 2>/dev/null || true)" = "27.2" ]; then
+              echo "using $candidate"
+              xcodebuild -version
+              exit 0
+            fi
+          done
+          echo "error: no installed Xcode provides the iOS 27.2 SDK" >&2
+          ls -1 /Applications | grep '^Xcode' || true
+          exit 1
       # The engine is upstream's, and it is not in this repository: this one
       # carries the app, the patch and the build scripts, and the engine comes
       # from the upstream project at a pinned commit.
