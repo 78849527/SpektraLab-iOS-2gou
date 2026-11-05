@@ -142,6 +142,68 @@ SpektraLab 的 iPhone 社区移植版。它使用 C++20 与 Metal 运行真实�
 
 ![Reversal film sunlight previews](docs/stock-previews-sunlight/reversal-films.jpg)
 
+### 蓝天与阴影平衡：Canon CR3
+
+以下联系表使用 Canon EOS R6 Mark III 的 `9738333703.cr3`，重点比较蓝天色相与饱和度、阳坡高光以及山体深阴影之间的平衡。解码与渲染参数和前两组保持一致。
+
+<details>
+<summary>Fujifilm Crystal Archive Type II</summary>
+
+![Fujifilm Crystal Archive Type II sky and shadow combinations](docs/stock-previews-sky-shadow/fujifilm_crystal_archive_typeii.jpg)
+</details>
+
+<details>
+<summary>Ilford Multigrade IV RC</summary>
+
+![Ilford Multigrade IV RC sky and shadow combinations](docs/stock-previews-sky-shadow/ilford_multigrade_iv_rc.jpg)
+</details>
+
+<details>
+<summary>Kodak Ektacolor Edge</summary>
+
+![Kodak Ektacolor Edge sky and shadow combinations](docs/stock-previews-sky-shadow/kodak_ektacolor_edge.jpg)
+</details>
+
+<details>
+<summary>Kodak Vision 2383（电影打印片）</summary>
+
+![Kodak Vision 2383 sky and shadow combinations](docs/stock-previews-sky-shadow/kodak_2383.jpg)
+</details>
+
+<details>
+<summary>Kodak Vision Premier 2393（电影打印片）</summary>
+
+![Kodak Vision Premier 2393 sky and shadow combinations](docs/stock-previews-sky-shadow/kodak_2393.jpg)
+</details>
+
+<details>
+<summary>Kodak Endura Premier</summary>
+
+![Kodak Endura Premier sky and shadow combinations](docs/stock-previews-sky-shadow/kodak_endura_premier.jpg)
+</details>
+
+<details>
+<summary>Kodak Portra Endura</summary>
+
+![Kodak Portra Endura sky and shadow combinations](docs/stock-previews-sky-shadow/kodak_portra_endura.jpg)
+</details>
+
+<details>
+<summary>Kodak Supra Endura</summary>
+
+![Kodak Supra Endura sky and shadow combinations](docs/stock-previews-sky-shadow/kodak_supra_endura.jpg)
+</details>
+
+<details>
+<summary>Kodak Ultra Endura</summary>
+
+![Kodak Ultra Endura sky and shadow combinations](docs/stock-previews-sky-shadow/kodak_ultra_endura.jpg)
+</details>
+
+反转片蓝天与阴影场景：
+
+![Reversal film sky and shadow previews](docs/stock-previews-sky-shadow/reversal-films.jpg)
+
 ## 下载
 
 前往 **[Latest Release](https://github.com/Minerchu/SpektraLab-iOS/releases/latest)** 下载最新 IPA。文件名包含提交号，用于避免 GitHub CDN 返回旧版本。
