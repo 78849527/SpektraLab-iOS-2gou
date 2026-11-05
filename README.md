@@ -8,7 +8,7 @@ SpektraLab 的 iPhone 社区移植版。它在设备上用 C++20 与 Metal 运�
 
 前往 **[Latest Release](https://github.com/Minerchu/SpektraLab-iOS/releases/latest)** 下载最新 IPA。Release 每次由 `main` 的最新成功构建替换，资产文件名带有提交号，避免 CDN 返回旧包。
 
-当前版本：**1.1.2**。本版重做了预览与片库布局，加入真实片边、日期后背、片边方向与 120 拍摄数据，并修复相册导入 Sony ARW。
+当前版本：**1.1.3**。本版修复曝光补偿：成片会随滑块真实变亮或变暗，而不再被印相机的中间调自动补偿抵消；同时保留预览重做、真实片边、日期后背、片边方向与 120 拍摄数据，以及相册导入 Sony ARW 的修复。
 
 推荐下载文件名以 **`-unsigned.ipa`** 结尾的版本：
 

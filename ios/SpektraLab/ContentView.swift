@@ -778,6 +778,9 @@ struct ParamSlider: View {
     }
 
     private var formatted: String {
+        if control.key == FilmParam.exposureCompensation.key {
+            return String(format: "%+.2f EV", value)
+        }
         if control.range.lowerBound < 0 {
             return String(format: "%+.2f", value)
         }

@@ -132,6 +132,16 @@ enum ParamCatalog {
 
 /// The default value of every control, as a delta the engine accepts on open.
 enum ParamDefaults {
+    /// The open-time switch that selects SpektraLab's product defaults.
+    ///
+    /// It is deliberately not a `params_schema` row, so `spk_set_params`
+    /// rejects it: only `spk_open` reads it. It is what turns off the
+    /// enlarger's mid-grey compensation, so `exposure_compensation_ev` moves
+    /// the finished print instead of only placing the scene on the film
+    /// curve. Without it the test print re-times itself for every exposure
+    /// change and the slider appears to do nothing.
+    static let productDefaultsKey = "product_defaults"
+
     static func delta(film: String, paper: String) -> [String: ParamValue] {
         var delta: [String: ParamValue] = [
             // Match the macOS preview host and its Core Image conversion:

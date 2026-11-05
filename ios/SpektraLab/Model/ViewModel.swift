@@ -352,6 +352,16 @@ final class ViewModel: ObservableObject {
         return delta
     }
 
+    /// The delta for `spk_open` only. `product_defaults` selects the product's
+    /// defaults at open time; `spk_set_params` does not accept the key, so it
+    /// must not be part of `currentEngineDelta()`, which also feeds the live
+    /// parameter updates.
+    private func currentOpenDelta() -> [String: ParamValue] {
+        var delta = currentEngineDelta()
+        delta[ParamDefaults.productDefaultsKey] = .bool(true)
+        return delta
+    }
+
     /// Load an already-decoded frame: open a session and render the first
     /// preview.
     private func loadFrame(_ decoded: DecodedFrame) async throws {
@@ -361,7 +371,7 @@ final class ViewModel: ObservableObject {
 
         // Open with the current stocks and parameters, so the first preview
         // already shows what the user chose.
-        let openDelta = currentEngineDelta()
+        let openDelta = currentOpenDelta()
 
         // The pointer has to stay alive across the `open` call: the engine
         // borrows the pixels for the duration of that call and copies what it
@@ -556,7 +566,7 @@ final class ViewModel: ObservableObject {
     /// Reopen the session with the current stocks and parameters.
     private func reopenAndRender() {
         guard let frame, let engine else { return }
-        let openDelta = currentEngineDelta()
+        let openDelta = currentOpenDelta()
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -685,7 +695,7 @@ final class ViewModel: ObservableObject {
                                         targetAspect: cropAspect)
             }.value
 
-            let exportDelta = currentEngineDelta()
+            let exportDelta = currentOpenDelta()
 
             // Open, solve and render are one unit on the engine's serial
             // queue. `full` stays alive only until `open` copies it; the
