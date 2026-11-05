@@ -20,7 +20,7 @@ SpektraLab 的 iPhone 社区移植版。它使用 C++20 与 Metal 运行真实�
 
 ## 胶片与相纸实测预览
 
-以下图片统一使用 Nikon Z6 II 的 `marinasheyanova@marina_sheyanova_msh_8485_174539603751.nef`，经 Apple RAW 解码后，以 iOS 当前默认参数通过项目自身的 C++/Metal 引擎生成。每张联系表固定一种相纸或电影打印片，并列出全部 21 款拍摄负片；这反映当前版本的真实输出，包括仍需继续修正的偏亮或偏色情况。
+以下图片统一使用 Nikon Z6 II 的 `marinasheyanova@marina_sheyanova_msh_8485_174539603751.nef`，由正式 iOS `ImageDecoder` 直接解码为 float32 线性 ProPhoto，再使用与 Mac 1.3.5 对齐的默认参数通过项目自身的 C++/Metal 引擎生成。每张联系表固定一种相纸或电影打印片，并列出全部 21 款拍摄负片；这些图片反映当前 iOS 版本的真实输出。
 
 <details>
 <summary>Fujifilm Crystal Archive Type II</summary>

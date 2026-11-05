@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -20,24 +21,22 @@ sys.path.insert(0, str(ENGINE / "tests"))
 
 from spk_ctypes import Engine, EngineError  # noqa: E402
 
-SRGB_TO_PROPHOTO = np.array([
-    [0.7977666, 0.1351813, 0.0313477],
-    [0.2880748, 0.7118352, 0.0000899],
-    [0.0, 0.0, 0.8252100],
-], dtype=np.float32)
-
-
 def decode_raw(path: Path, work: Path) -> np.ndarray:
-    jpeg = work / "apple-raw-preview.jpg"
+    decoder = work / "image-decoder-dump"
+    dump = work / "frame.bin"
     subprocess.run([
-        "sips", "-s", "format", "jpeg", "--resampleHeightWidthMax", "360",
-        str(path), "--out", str(jpeg),
-    ], check=True, stdout=subprocess.DEVNULL)
-    decoded = ImageOps.exif_transpose(Image.open(jpeg)).convert("RGB")
-    rgb = np.asarray(decoded, dtype=np.float32) / 255.0
-    linear = np.where(rgb <= 0.04045, rgb / 12.92,
-                      np.power((rgb + 0.055) / 1.055, 2.4)).astype(np.float32)
-    return np.ascontiguousarray(linear @ SRGB_TO_PROPHOTO.T)
+        "xcrun", "swiftc",
+        str(ROOT / "ios/SpektraLab/Import/ImageDecoder.swift"),
+        str(ROOT / "ios/Tests/ImageDecoderDump/main.swift"),
+        "-o", str(decoder),
+        "-framework", "CoreImage", "-framework", "CoreGraphics",
+        "-framework", "ImageIO", "-framework", "UniformTypeIdentifiers",
+    ], check=True)
+    subprocess.run([str(decoder), str(path), str(dump), "1024"], check=True)
+    blob = dump.read_bytes()
+    width, height = struct.unpack_from("<II", blob)
+    frame = np.frombuffer(blob, dtype="<f4", offset=8)
+    return np.ascontiguousarray(frame.reshape(height, width, 3))
 
 
 def profile_catalog(resources: Path) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
@@ -75,10 +74,13 @@ def render(engine: Engine, frame: np.ndarray, film: str, paper: str,
         "input_color_space": "ProPhoto RGB", "input_cctf_decoding": False,
         "output_color_space": "sRGB", "output_cctf_encoding": True,
         "film_stock": film, "print_stock": paper, "auto_exposure": True,
-        "grain_active": True, "grain_amount": 0.35,
-        "halation_active": True, "halation_amount": 0.25,
-        "glare_active": True, "glare_amount": 0.15,
-        "density_curve_gamma": 0.45,
+        "auto_exposure_method": "balanced", "film_format_mm": 36.0,
+        "grain_active": True, "grain_sublayers_active": True, "grain_amount": 1.0,
+        "halation_active": True, "halation_amount": 1.0,
+        "halation_scatter_amount": 1.0, "halation_headroom_ev": 4.0,
+        "dir_couplers_active": True, "dir_couplers_amount": 1.0,
+        "glare_active": True, "glare_amount": 1.0,
+        "density_curve_gamma": 1.0, "filter_shift_scale": 40.0,
     }
     if scan_film:
         delta["scan_film"] = True
