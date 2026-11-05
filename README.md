@@ -80,6 +80,68 @@ SpektraLab 的 iPhone 社区移植版。它使用 C++20 与 Metal 运行真实�
 
 ![Reversal film previews](docs/stock-previews/reversal-films.jpg)
 
+### 阳光场景：Olympus ORF
+
+以下联系表使用 `P9020196.ORF`，用于比较蓝天、直射阳光、石材高光和建筑阴影下的胶片表现。解码与渲染流程和上面的 Nikon 样片完全相同。
+
+<details>
+<summary>Fujifilm Crystal Archive Type II</summary>
+
+![Fujifilm Crystal Archive Type II sunlight combinations](docs/stock-previews-sunlight/fujifilm_crystal_archive_typeii.jpg)
+</details>
+
+<details>
+<summary>Ilford Multigrade IV RC</summary>
+
+![Ilford Multigrade IV RC sunlight combinations](docs/stock-previews-sunlight/ilford_multigrade_iv_rc.jpg)
+</details>
+
+<details>
+<summary>Kodak Ektacolor Edge</summary>
+
+![Kodak Ektacolor Edge sunlight combinations](docs/stock-previews-sunlight/kodak_ektacolor_edge.jpg)
+</details>
+
+<details>
+<summary>Kodak Vision 2383（电影打印片）</summary>
+
+![Kodak Vision 2383 sunlight combinations](docs/stock-previews-sunlight/kodak_2383.jpg)
+</details>
+
+<details>
+<summary>Kodak Vision Premier 2393（电影打印片）</summary>
+
+![Kodak Vision Premier 2393 sunlight combinations](docs/stock-previews-sunlight/kodak_2393.jpg)
+</details>
+
+<details>
+<summary>Kodak Endura Premier</summary>
+
+![Kodak Endura Premier sunlight combinations](docs/stock-previews-sunlight/kodak_endura_premier.jpg)
+</details>
+
+<details>
+<summary>Kodak Portra Endura</summary>
+
+![Kodak Portra Endura sunlight combinations](docs/stock-previews-sunlight/kodak_portra_endura.jpg)
+</details>
+
+<details>
+<summary>Kodak Supra Endura</summary>
+
+![Kodak Supra Endura sunlight combinations](docs/stock-previews-sunlight/kodak_supra_endura.jpg)
+</details>
+
+<details>
+<summary>Kodak Ultra Endura</summary>
+
+![Kodak Ultra Endura sunlight combinations](docs/stock-previews-sunlight/kodak_ultra_endura.jpg)
+</details>
+
+反转片阳光场景：
+
+![Reversal film sunlight previews](docs/stock-previews-sunlight/reversal-films.jpg)
+
 ## 下载
 
 前往 **[Latest Release](https://github.com/Minerchu/SpektraLab-iOS/releases/latest)** 下载最新 IPA。文件名包含提交号，用于避免 GitHub CDN 返回旧版本。
