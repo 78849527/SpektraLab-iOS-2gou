@@ -17,14 +17,14 @@ import MetalKit
 import UIKit
 import UniformTypeIdentifiers
 
-private extension Color {
+extension Color {
     static var labInk: Color { Color(red: 0.071, green: 0.071, blue: 0.075) }
     static var labPanel: Color { Color(red: 0.110, green: 0.110, blue: 0.118) }
     static var labCream: Color { Color(red: 0.965, green: 0.949, blue: 0.918) }
     static var labRed: Color { Color(red: 0.96, green: 0.27, blue: 0.24) }
 }
 
-private extension View {
+extension View {
     /// Native Liquid Glass on Xcode 27. Older CI images do not expose the
     /// symbol, so they compile the same layout with a material fallback.
     @ViewBuilder
@@ -40,13 +40,58 @@ private extension View {
         }
 #endif
     }
+
+    nonisolated func labGlassInteractive<S: Shape>(_ active: Bool = true, in shape: S) -> some View {
+#if compiler(>=6.2)
+        glassEffect(active ? .regular.interactive() : .clear, in: shape)
+#else
+        if active {
+            background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(Color.white.opacity(0.10), lineWidth: 1))
+        } else {
+            self
+        }
+#endif
+    }
+
+    /// A tinted glass surface. Used for the one primary action on a screen
+    /// (add photos, paste a recipe), so the rest of the chrome stays neutral.
+    nonisolated func labGlassTint<S: Shape>(_ tint: Color, in shape: S) -> some View {
+#if compiler(>=6.2)
+        glassEffect(.regular.tint(tint).interactive(), in: shape)
+#else
+        background(tint.opacity(0.42), in: shape)
+            .background(.ultraThinMaterial, in: shape)
+            .overlay(shape.stroke(Color.white.opacity(0.12), lineWidth: 1))
+#endif
+    }
 }
 
-struct ContentView: View {
+/// A nearly black darkroom with two faint spills of coloured light. The glass
+/// controls need something beneath them to refract, but the backdrop stays
+/// quiet enough not to compete with a photograph's own colour.
+struct LabBackdrop: View {
+    var body: some View {
+        ZStack {
+            Color(red: 0.043, green: 0.044, blue: 0.050)
+            LinearGradient(colors: [Color.white.opacity(0.020), .clear, .black.opacity(0.16)],
+                           startPoint: .top, endPoint: .bottom)
+            RadialGradient(colors: [Color(red: 0.94, green: 0.31, blue: 0.22).opacity(0.11), .clear],
+                           center: UnitPoint(x: 0.96, y: 0.01),
+                           startRadius: 4, endRadius: 430)
+            RadialGradient(colors: [Color(red: 0.30, green: 0.50, blue: 0.67).opacity(0.065), .clear],
+                           center: UnitPoint(x: 0.02, y: 0.74),
+                           startRadius: 8, endRadius: 390)
+            RadialGradient(colors: [.clear, .black.opacity(0.24)],
+                           center: .center, startRadius: 170, endRadius: 520)
+        }
+        .ignoresSafeArea()
+    }
+}
+
+struct EditorView: View {
     @EnvironmentObject private var model: ViewModel
-    @State private var pickerItem: PhotosPickerItem?
     @State private var showingExport = false
-    @State private var showingFileImporter = false
     @State private var showingDiagnostics = false
     @State private var showingFilmEffects = false
     @State private var hiddenError: String?
@@ -56,6 +101,7 @@ struct ContentView: View {
     @State private var savedZoom: CGFloat = 1
     @State private var pan = CGSize.zero
     @State private var savedPan = CGSize.zero
+    @State private var copyToast = false
 
     private enum Deck: String, CaseIterable, Identifiable, Equatable {
         case film = "胶片"
@@ -66,9 +112,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            LinearGradient(colors: [Color(red: 0.105, green: 0.105, blue: 0.112), Color.labInk],
-                           startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea()
+            LabBackdrop()
 
             VStack(spacing: 0) {
                 if !immersive {
@@ -93,8 +137,7 @@ struct ContentView: View {
                     Image(systemName: "arrow.down.right.and.arrow.up.left")
                         .font(.system(size: 14, weight: .semibold))
                         .frame(width: 40, height: 40)
-                        .background(.ultraThinMaterial, in: Circle())
-                        .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 1))
+                        .labGlassInteractive(in: Circle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.labCream)
@@ -102,6 +145,20 @@ struct ContentView: View {
                 .padding(.bottom, 24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 .transition(.opacity)
+            }
+
+            if copyToast {
+                Text("配方已复制")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color.labCream)
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 38)
+                    .labGlass(in: Capsule())
+                    .shadow(color: .black.opacity(0.28), radius: 18, y: 8)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 66)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
             }
         }
         .animation(.snappy(duration: 0.24), value: immersive)
@@ -119,20 +176,8 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingDiagnostics) { diagnosticsSheet }
         .sheet(isPresented: $showingFilmEffects) { FilmEffectsSheet(model: model) }
-        .fileImporter(isPresented: $showingFileImporter,
-                      allowedContentTypes: [.image, .rawImage],
-                      allowsMultipleSelection: false) { result in
-            guard case .success(let urls) = result, let url = urls.first else { return }
-            Task { @MainActor in
-                await model.importFile(from: url)
-            }
-        }
 #if DEBUG
         .task {
-            guard model.renderedTexture == nil,
-                  let path = ProcessInfo.processInfo.environment["SPEKTRAFILM_UI_TEST_PATH"],
-                  !path.isEmpty else { return }
-            await model.importFile(from: URL(fileURLWithPath: path))
             let environment = ProcessInfo.processInfo.environment
             if let film = environment["SPEKTRAFILM_UI_TEST_FILM"], !film.isEmpty {
                 model.filmChanged(film)
@@ -187,21 +232,7 @@ struct ContentView: View {
     // MARK: - top bar
 
     private var topBar: some View {
-        HStack(spacing: 10) {
-            PhotosPicker(selection: pickerBinding, matching: .images) {
-                Image(systemName: "photo.on.rectangle")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 36, height: 36)
-                    .labGlass(in: Circle())
-            }
-            .contextMenu {
-                Button {
-                    showingFileImporter = true
-                } label: {
-                    Label("从文件导入 RAW / JPEG", systemImage: "folder")
-                }
-            }
-            Spacer()
+        ZStack {
             Button {
                 withAnimation(.easeOut(duration: 0.18)) { deck = .film }
             } label: {
@@ -222,29 +253,84 @@ struct ContentView: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.78)
                 }
-                .frame(maxWidth: 250)
+                .padding(.horizontal, 14)
+                .frame(maxWidth: 190)
+                .frame(height: 42)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("当前胶片 \(model.currentFilmName)，相纸 \(model.currentPaperName)")
-            Spacer()
-            Button {
-                showingExport = true
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 36, height: 36)
-                    .labGlass(in: Circle())
+            .labGlassInteractive(in: Capsule())
+
+            HStack(spacing: 8) {
+                Button {
+                    model.closeEditor()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 42, height: 42)
+                        .labGlassInteractive(in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("返回照片墙")
+
+                Spacer()
+
+                GlassEffectContainer(spacing: 8) {
+                    HStack(spacing: 8) {
+                        Menu {
+                            if model.editingPhotoID != nil {
+                                Button {
+                                    if let id = model.editingPhotoID {
+                                        model.copyRecipe(from: id)
+                                        copyToast = true
+                                        Task { @MainActor in
+                                            try? await Task.sleep(for: .seconds(2))
+                                            copyToast = false
+                                        }
+                                    }
+                                } label: {
+                                    Label("复制这张照片的配方", systemImage: "doc.on.doc")
+                                }
+                            }
+                            Button {
+                                model.closeEditor()
+                            } label: {
+                                Label("保存并返回照片墙", systemImage: "rectangle.stack")
+                            }
+                            Divider()
+                            Button {
+                                showingDiagnostics = true
+                            } label: {
+                                Label("诊断信息", systemImage: "info.circle")
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 15, weight: .semibold))
+                                .frame(width: 42, height: 42)
+                                .labGlassInteractive(in: Circle())
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            showingExport = true
+                        } label: {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 15, weight: .semibold))
+                                .frame(width: 42, height: 42)
+                                .labGlassInteractive(in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(model.renderedTexture == nil)
+                        .opacity(model.renderedTexture == nil ? 0.4 : 1)
+                    }
+                }
             }
-            .disabled(model.renderedTexture == nil)
-            .opacity(model.renderedTexture == nil ? 0.4 : 1)
         }
         .tint(Color.labRed)
-        .padding(.horizontal, 11)
-        .frame(minHeight: 46)
-        .labGlass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .padding(.top, 5)
-        .padding(.horizontal, 10)
+        .foregroundStyle(Color.labCream)
+        .padding(.top, 3)
+        .padding(.horizontal, 12)
     }
 
     // MARK: - the picture
@@ -372,44 +458,34 @@ struct ContentView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 18) {
             ZStack {
-                Circle().fill(Color.labRed.opacity(0.14)).frame(width: 96, height: 96)
-                Circle().stroke(Color.labRed.opacity(0.35), lineWidth: 1).frame(width: 96, height: 96)
-                Image(systemName: "camera.aperture")
-                    .font(.system(size: 40, weight: .light))
+                Circle().fill(Color.labRed.opacity(0.14)).frame(width: 92, height: 92)
+                Circle().stroke(Color.labRed.opacity(0.35), lineWidth: 1).frame(width: 92, height: 92)
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 34, weight: .light))
                     .foregroundStyle(Color.labRed)
             }
-            VStack(spacing: 8) {
-                Text("让照片拥有胶片质感")
+            VStack(spacing: 7) {
+                Text("这张照片没有显示出来")
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(Color.labCream)
-                Text("导入照片，滑动挑选胶片与相纸\n光谱模拟 · 染料层耦合 · 颗粒与光晕")
+                Text("回到照片墙重新打开，或查看诊断信息。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .lineSpacing(4)
             }
-            PhotosPicker(selection: pickerBinding, matching: .images) {
-                Label("选择照片", systemImage: "photo.badge.plus")
+            Button {
+                model.closeEditor()
+            } label: {
+                Label("返回照片墙", systemImage: "chevron.left")
                     .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, 22)
                     .frame(minHeight: 46)
                     .background(Color.labRed, in: Capsule())
-                    .foregroundStyle(Color.white)
+                    .foregroundStyle(.white)
             }
-            .padding(.top, 4)
-            Button {
-                showingFileImporter = true
-            } label: {
-                Label("从文件导入 Sony ARW / RAW", systemImage: "folder.badge.plus")
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(Color.labRed)
-            }
-            Text("\(model.films.count) PROFILES  ·  \(model.papers.count) PAPERS")
-                .font(.caption2.weight(.medium))
-                .tracking(1.2)
-                .foregroundStyle(.tertiary)
+            .buttonStyle(.plain)
         }
         .padding(.vertical, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -583,21 +659,6 @@ struct ContentView: View {
 
     private var isBusy: Bool {
         model.state == .rendering || model.state == .importing
-    }
-
-    private var pickerBinding: Binding<PhotosPickerItem?> {
-        Binding<PhotosPickerItem?>(
-            get: { pickerItem },
-            set: { newItem in
-                pickerItem = newItem
-                hiddenError = nil
-                if let newItem {
-                    Task<Void, Never>(priority: .userInitiated) { @MainActor in
-                        await model.importPicked(newItem)
-                    }
-                }
-            }
-        )
     }
 
     private var failureMessage: String? {
@@ -800,7 +861,17 @@ struct StockTile: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 7) {
-                thumbnail
+                StockArtwork(stock: stock)
+                    .frame(width: 44, height: 50)
+                    .overlay(alignment: .topTrailing) {
+                        if selected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.labRed)
+                                .background(Color.labCream, in: Circle())
+                                .offset(x: 4, y: -4)
+                        }
+                    }
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(stock.name)
@@ -836,86 +907,9 @@ struct StockTile: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    private var thumbnail: some View {
-        ZStack {
-            if let coverURL = stock.coverURL,
-               let cover = UIImage(contentsOfFile: coverURL.path) {
-                Image(uiImage: cover)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                LinearGradient(colors: [swatch.opacity(0.90), swatch.opacity(0.34)],
-                               startPoint: .topLeading, endPoint: .bottomTrailing)
-                VStack(spacing: 3) {
-                    Image(systemName: symbol)
-                        .font(.system(size: 20, weight: .light))
-                        .foregroundStyle(Color.white.opacity(0.90))
-                    Text(brandCode)
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
-                        .tracking(0.7)
-                        .foregroundStyle(Color.white.opacity(0.92))
-                }
-            }
-
-        }
-        .frame(width: 40, height: 48)
-        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-        }
-        .overlay(alignment: .topTrailing) {
-            if selected {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.labRed)
-                    .background(Color.labCream, in: Circle())
-                    .padding(3)
-            }
-        }
-    }
-
-    private var symbol: String {
-        if stock.support == .paper { return "photo.stack" }
-        if stock.type == .positive { return "sun.max" }
-        return "film.stack"
-    }
-
     private var typeLabel: String {
         if stock.support == .paper { return "相纸" }
         return stock.type == .positive ? "反转片" : "负片"
-    }
-
-    private var brandCode: String {
-        let id = stock.id
-        if id.hasPrefix("kodak") { return "KODAK" }
-        if id.hasPrefix("fujifilm") { return "FUJI" }
-        if id.hasPrefix("ilford") { return "ILFORD" }
-        if id.hasPrefix("cinestill") { return "CINE" }
-        return shortCode
-    }
-
-    /// A stable colour per profile, so the strip reads as a set of looks
-    /// rather than a list of identical thumbnails.
-    private var swatch: Color {
-        var hash = 0
-        for scalar in stock.id.unicodeScalars {
-            hash = (hash &* 31 &+ Int(scalar.value)) & 0x7fffffff
-        }
-        let hue = Double(hash % 360) / 360.0
-        let paper = stock.support.rawValue == "paper"
-        let slide = stock.type.rawValue == "positive"
-        return Color(hue: hue,
-                     saturation: paper ? 0.16 : (slide ? 0.55 : 0.38),
-                     brightness: 0.88)
-    }
-
-    /// Profiles without a photographed box still get a stable identifier.
-    private var shortCode: String {
-        stock.id.split(separator: "_")
-            .prefix(2)
-            .map { String($0.prefix(1)).uppercased() }
-            .joined()
     }
 }
 

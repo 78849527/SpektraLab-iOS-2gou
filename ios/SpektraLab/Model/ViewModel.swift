@@ -77,6 +77,32 @@ final class ViewModel: ObservableObject {
     /// The catalogue, read at launch.
     @Published private(set) var catalog = StockCatalog(films: [], papers: [], slides: [])
 
+    // MARK: - the photo wall
+
+    /// Every imported photograph, newest first. The originals and thumbnails
+    /// live on disk; this array is the UI's index into them.
+    @Published private(set) var library: [LibraryPhoto] = []
+    /// Non-nil while the wall is showing and a photograph should be open in
+    /// the editor. `ContentView` switches the whole screen on this.
+    @Published private(set) var editingPhotoID: UUID?
+    /// A modal, wall-level operation: importing, opening, or applying a recipe
+    /// across a selection. It is separate from `state`, which belongs to the
+    /// editor's engine session.
+    @Published private(set) var libraryBusy: String?
+    @Published private(set) var libraryMessage: String?
+    /// The last copied look. Kept in UserDefaults as well as memory, so
+    /// closing the app does not lose a recipe the person just copied.
+    @Published private(set) var clipboardRecipe: PhotoRecipe?
+    /// The photograph the clipboard recipe came from. It is deliberately not a
+    /// valid paste target: a recipe is copied *from* this frame, not back onto
+    /// it, and the wall dims it while the recipe is on the clipboard.
+    @Published private(set) var recipeSourcePhotoID: UUID?
+
+    var editingPhoto: LibraryPhoto? {
+        guard let id = editingPhotoID else { return nil }
+        return library.first { $0.id == id }
+    }
+
     /// The stocks, in the order the scrolling strip shows them.
     var films: [Stock] { catalog.films + catalog.slides }
     var papers: [Stock] { catalog.papers }
@@ -175,6 +201,9 @@ final class ViewModel: ObservableObject {
     private var renderInFlight = false
     private var needsRender = false
     private var paramsDirty = false
+    /// The recipe the editor opened with. `closeEditor` compares against it so
+    /// merely viewing a photo does not mark it as edited.
+    private var editingBaseRecipe: PhotoRecipe?
 
     // MARK: - life cycle
 
@@ -191,6 +220,8 @@ final class ViewModel: ObservableObject {
         // than an error.
         let resources = SpektraEngine.defaultResources()
         catalog = StockCatalog.load(resources: resources)
+        loadLibrary()
+        loadClipboardRecipe()
 
         for control in ParamCatalog.all {
             params[control.key] = control.defaultValue
@@ -254,57 +285,111 @@ final class ViewModel: ObservableObject {
         return try await item.loadTransferable(type: Data.self) ?? Data()
     }
 
-    /// Take a photo from the library.
-    func importPicked(_ item: PhotosPickerItem?) async {
-        guard let item else { return }
-        pickedItem = item
-        state = .importing
-        statusText = "正在读取照片…"
-
-        do {
-            let data = try await Self.loadData(from: item)
-            guard !data.isEmpty else {
-                throw DecodeError.unreadable("照片没有返回数据")
+    /// Import several photographs from Photos. Importing only fills the wall;
+    /// it does not steal the screen by opening the first one.
+    func importPickedItems(_ items: [PhotosPickerItem]) async {
+        guard !items.isEmpty else { return }
+        libraryBusy = "正在导入 0/\(items.count)"
+        var imported = 0
+        var failed = 0
+        for (index, item) in items.enumerated() {
+            libraryBusy = "正在导入 \(index + 1)/\(items.count)"
+            do {
+                let data = try await Self.loadData(from: item)
+                guard !data.isEmpty else { throw DecodeError.unreadable("照片没有返回数据") }
+                let hint = item.supportedContentTypes.first { $0.conforms(to: .rawImage) }
+                    ?? item.supportedContentTypes.first
+                    ?? ImageDecoder.inferredRAWTypeHint(for: data)
+                let name = String(format: "照片 %02d", library.count + 1)
+                try await addPhoto(data: data, name: name, typeHint: hint)
+                imported += 1
+            } catch {
+                failed += 1
             }
-            // `PickedImageData` returns the original bytes but not the type
-            // that produced them. Keep the picker's RAW UTI, or sniff the
-            // container, so an ARW is not mistaken for a plain public.tiff.
-            let typeHint = item.supportedContentTypes.first {
-                $0.conforms(to: .rawImage)
-            } ?? ImageDecoder.inferredRAWTypeHint(for: data)
-            try await importData(data, typeHint: typeHint)
-        } catch {
-            state = .failed(error.localizedDescription)
-            statusText = "导入失败"
+            await Task.yield()
         }
+        libraryBusy = nil
+        libraryMessage = failed == 0
+            ? "已导入 \(imported) 张照片"
+            : "已导入 \(imported) 张，\(failed) 张无法读取"
     }
 
-    /// Import a file selected from Files. This path is essential for Sony
-    /// ARW: PhotosPicker may expose only a rendered preview for some RAW
-    /// assets, while a security-scoped file URL gives Core Image the original
-    /// container and its maker metadata.
+    /// Import one or more files, including the RAW containers Photos may only
+    /// expose as a rendered preview.
+    func importFiles(from urls: [URL]) async {
+        guard !urls.isEmpty else { return }
+        libraryBusy = "正在导入 0/\(urls.count)"
+        var imported = 0
+        var failed = 0
+        for (index, url) in urls.enumerated() {
+            libraryBusy = "正在导入 \(index + 1)/\(urls.count)"
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+                guard !data.isEmpty else { throw DecodeError.unreadable("文件为空") }
+                let hint = UTType(filenameExtension: url.pathExtension)
+                try await addPhoto(data: data,
+                                   name: url.deletingPathExtension().lastPathComponent,
+                                   typeHint: hint)
+                imported += 1
+            } catch {
+                failed += 1
+            }
+            await Task.yield()
+        }
+        libraryBusy = nil
+        libraryMessage = failed == 0
+            ? "已导入 \(imported) 张照片"
+            : "已导入 \(imported) 张，\(failed) 张无法读取"
+    }
+
+    /// Single-file compatibility entry point for the DEBUG probe.
     func importFile(from url: URL) async {
-        state = .importing
-        statusText = "正在读取原始文件…"
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-        do {
-            let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-            guard !data.isEmpty else { throw DecodeError.unreadable("文件为空") }
-            try await importData(data, typeHint: UTType(filenameExtension: url.pathExtension))
-        } catch {
-            state = .failed(error.localizedDescription)
-            statusText = "导入失败：\(url.lastPathComponent)"
-        }
+        await importFiles(from: [url])
     }
 
-    private func importData(_ data: Data, typeHint: UTType? = nil) async throws {
+    /// Put the bytes on disk, make the wall's thumbnail, and append the photo.
+    @discardableResult
+    private func addPhoto(data: Data, name: String, typeHint: UTType?) async throws -> UUID {
+        let root = libraryRoot
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let id = UUID()
+        let ext = typeHint?.preferredFilenameExtension ?? "img"
+        let fileName = "\(id.uuidString).\(ext)"
+        let originalURL = root.appendingPathComponent(fileName)
+        try data.write(to: originalURL, options: .atomic)
+
+        let made = LibraryThumbnail.from(data: data)
+        let thumbnail = made?.0 ?? LibraryThumbnail.placeholder()
+        let width = made?.1 ?? thumbnail.cgImage?.width ?? 0
+        let height = made?.2 ?? thumbnail.cgImage?.height ?? 0
+        try LibraryThumbnail.saveJPEG(thumbnail, to: thumbnailURL(for: id))
+
+        let photo = LibraryPhoto(id: id,
+                                 name: name,
+                                 fileName: fileName,
+                                 typeIdentifier: typeHint?.identifier,
+                                 pixelWidth: width,
+                                 pixelHeight: height,
+                                 sourceAspect: Double(thumbnail.size.width / max(thumbnail.size.height, 1)),
+                                 createdAt: Date(),
+                                 recipe: PhotoRecipe.standard,
+                                 isEdited: false,
+                                 thumbnail: thumbnail)
+        library.insert(photo, at: 0)
+        saveLibraryManifest()
+        return id
+    }
+
+    /// Decode and open one photograph in the editor's engine session. This is
+    /// the old import path minus the library write: the photo already exists
+    /// on the wall.
+    private func loadPhoto(data: Data, typeHint: UTType?, name: String) async throws {
         sourceGeneration &+= 1
         effectReloadNeeded = false
         originalData = data
         originalTypeHint = typeHint
-        // The preview decode is small: the live tier renders at 2048 px on
-        // the long edge, so a bigger decode buys nothing and costs memory.
         let decoded = try ImageDecoder.decode(data: data,
                                               maxLongEdge: ImageDecoder.previewLongEdge,
                                               typeHint: typeHint)
@@ -313,7 +398,22 @@ final class ViewModel: ObservableObject {
             ? decoded.centerCropped(toTargetAspect: filmCropAspect)
             : decoded
         try await loadFrame(framed)
-        statusText = "已载入 \(decoded.width)×\(decoded.height) · \(String(format: "%.1f", decoded.megapixels)) MP"
+        statusText = "已载入 \(name) · \(decoded.width)×\(decoded.height) · \(String(format: "%.1f", decoded.megapixels)) MP"
+    }
+
+    /// The look currently on the canvas, ready to be stored on a photo or
+    /// copied to the wall's recipe clipboard.
+    var currentRecipe: PhotoRecipe {
+        PhotoRecipe(filmStock: filmStock,
+                    printStock: printStock,
+                    params: params,
+                    filmBorderEnabled: filmBorderEnabled,
+                    overscanFormat: overscanFormat,
+                    stripOrientation: stripOrientation.rawValue,
+                    dateBackEnabled: dateBackEnabled,
+                    dateBackStyle: dateBackStyle.rawValue,
+                    dateBackPlacement: dateBackPlacement.rawValue,
+                    dateBackCorner: dateBackCorner.rawValue)
     }
 
     /// Every path that opens a session uses the same complete delta. The
@@ -321,35 +421,10 @@ final class ViewModel: ObservableObject {
     /// negative, so leaving them out here would make the preview and export
     /// disagree with the controls.
     private func currentEngineDelta() -> [String: ParamValue] {
-        var delta = ParamDefaults.delta(film: filmStock, paper: printStock)
-        for (key, value) in params { delta[key] = .number(value) }
-
-        let gate = selectedGate
-        delta["overscan_active"] = .bool(filmBorderEnabled)
-        delta["overscan_format"] = .string(gate.id)
-        delta["overscan_mode"] = .string("strip")
-        delta["overscan_gate"] = .string("auto")
-        delta["overscan_holes"] = .string("white")
-        delta["overscan_carrier"] = .string("none")
-        delta["overscan_edge_text"] = .string(currentFilmName.uppercased())
-        delta["overscan_frame_number"] = .number(12)
-        delta["overscan_camera_seed"] = .number(7)
-        delta["overscan_frame_seed"] = .number(11)
-        delta["overscan_fog"] = .number(1)
-        delta["overscan_leaks"] = .number(0)
-
-        let dateActive = dateBackEnabled && gate.supportsDateBack
-        delta["date_imprint_active"] = .bool(dateActive)
-        delta["date_imprint_text"] = .string(dateStampText)
-        delta["date_imprint_data_text"] = .string(shootingDataText)
-        delta["date_imprint_placement"] = .string(effectiveDateBackPlacement.rawValue)
-        delta["date_imprint_style"] = .string(dateBackStyle.rawValue)
-        delta["date_imprint_corner"] = .string(dateBackCorner.rawValue)
-        delta["date_imprint_ev"] = .number(3.5)
-        delta["date_imprint_size"] = .number(1)
-        delta["date_imprint_inset_x"] = .number(3)
-        delta["date_imprint_inset_y"] = .number(2.4)
-        return delta
+        currentRecipe.engineDelta(filmName: currentFilmName,
+                                  imageAspect: naturalAspect,
+                                  stamp: dateStampDate,
+                                  shootingData: shootingDataText)
     }
 
     /// The delta for `spk_open` only. `product_defaults` selects the product's
@@ -360,6 +435,303 @@ final class ViewModel: ObservableObject {
         var delta = currentEngineDelta()
         delta[ParamDefaults.productDefaultsKey] = .bool(true)
         return delta
+    }
+
+    // MARK: - the photo wall
+
+    private static let clipboardRecipeKey = "SpektraLab.clipboardRecipe"
+    private static let clipboardRecipeSourceKey = "SpektraLab.clipboardRecipeSource"
+
+    private var libraryRoot: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory,
+                                            in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return base.appendingPathComponent("SpektraLabLibrary", isDirectory: true)
+    }
+
+    private func thumbnailURL(for id: UUID) -> URL {
+        libraryRoot.appendingPathComponent("\(id.uuidString)-thumb.jpg")
+    }
+
+    private func originalURL(for photo: LibraryPhoto) -> URL {
+        libraryRoot.appendingPathComponent(photo.fileName)
+    }
+
+    func filmName(for stock: String) -> String {
+        films.first { $0.id == stock }?.name ?? stock
+    }
+
+    private func prepareLibraryRoot() {
+        let root = libraryRoot
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var mutable = root
+        try? mutable.setResourceValues(values)
+    }
+
+    private func loadLibrary() {
+        prepareLibraryRoot()
+        guard let data = try? Data(contentsOf: libraryRoot.appendingPathComponent("library.json")),
+              let entries = try? JSONDecoder().decode([LibraryManifestEntry].self, from: data)
+        else { return }
+        library = entries.compactMap { entry in
+            let thumbURL = thumbnailURL(for: entry.id)
+            guard let thumbnail = UIImage(contentsOfFile: thumbURL.path) else { return nil }
+            return LibraryPhoto(id: entry.id,
+                                name: entry.name,
+                                fileName: entry.fileName,
+                                typeIdentifier: entry.typeIdentifier,
+                                pixelWidth: entry.pixelWidth,
+                                pixelHeight: entry.pixelHeight,
+                                sourceAspect: entry.sourceAspect,
+                                createdAt: entry.createdAt,
+                                recipe: entry.recipe,
+                                isEdited: entry.isEdited,
+                                thumbnail: thumbnail)
+        }.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private func saveLibraryManifest() {
+        prepareLibraryRoot()
+        let entries = library.map { photo in
+            LibraryManifestEntry(id: photo.id,
+                                 name: photo.name,
+                                 fileName: photo.fileName,
+                                 typeIdentifier: photo.typeIdentifier,
+                                 pixelWidth: photo.pixelWidth,
+                                 pixelHeight: photo.pixelHeight,
+                                 sourceAspect: photo.sourceAspect,
+                                 createdAt: photo.createdAt,
+                                 recipe: photo.recipe,
+                                 isEdited: photo.isEdited)
+        }
+        guard let data = try? JSONEncoder().encode(entries) else { return }
+        try? data.write(to: libraryRoot.appendingPathComponent("library.json"), options: .atomic)
+    }
+
+    private func loadClipboardRecipe() {
+        guard let data = UserDefaults.standard.data(forKey: Self.clipboardRecipeKey),
+              let recipe = try? JSONDecoder().decode(PhotoRecipe.self, from: data)
+        else { return }
+        clipboardRecipe = recipe
+        if let raw = UserDefaults.standard.string(forKey: Self.clipboardRecipeSourceKey),
+           let id = UUID(uuidString: raw),
+           library.contains(where: { $0.id == id }) {
+            recipeSourcePhotoID = id
+        }
+    }
+
+    private func saveClipboardRecipe(_ recipe: PhotoRecipe) {
+        UserDefaults.standard.set(try? JSONEncoder().encode(recipe),
+                                  forKey: Self.clipboardRecipeKey)
+        if let recipeSourcePhotoID {
+            UserDefaults.standard.set(recipeSourcePhotoID.uuidString,
+                                      forKey: Self.clipboardRecipeSourceKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.clipboardRecipeSourceKey)
+        }
+    }
+
+    /// Switch the editor's controls to a stored look. Missing parameter keys
+    /// are filled from the catalogue by `normalizedParams`.
+    private func apply(_ recipe: PhotoRecipe) {
+        params = recipe.normalizedParams
+        filmStock = films.contains { $0.id == recipe.filmStock }
+            ? recipe.filmStock : StockCatalog.defaultFilm
+        printStock = papers.contains { $0.id == recipe.printStock }
+            ? recipe.printStock : StockCatalog.defaultPaper
+        filmBorderEnabled = recipe.filmBorderEnabled
+        overscanFormat = recipe.overscanFormat == FilmGateCatalog.automaticID
+            || FilmGateCatalog.gate(id: recipe.overscanFormat) != nil
+            ? recipe.overscanFormat : FilmGateCatalog.automaticID
+        stripOrientation = FilmStripOrientation(rawValue: recipe.stripOrientation) ?? .automatic
+        dateBackEnabled = recipe.dateBackEnabled
+        dateBackStyle = DateBackStyle(rawValue: recipe.dateBackStyle) ?? .lcd
+        dateBackPlacement = DateBackPlacement(rawValue: recipe.dateBackPlacement) ?? .frame
+        dateBackCorner = DateBackCorner(rawValue: recipe.dateBackCorner) ?? .br
+    }
+
+    /// Open a wall photo in the editor. The wall stays on screen with a small
+    /// progress label until the engine has the first preview, so the editor
+    /// never appears as an empty "add a photo" screen.
+    func openLibraryPhoto(_ id: UUID) async {
+        guard libraryBusy == nil,
+              let photo = library.first(where: { $0.id == id }) else { return }
+        guard engine != nil else {
+            libraryMessage = "引擎还在准备，请稍后再试"
+            return
+        }
+        libraryBusy = "正在打开 \(photo.name)…"
+        apply(photo.recipe)
+        dateStampDate = photo.createdAt
+        shootingDataText = "1/125  F2.8  ISO 400  50mm"
+        editingBaseRecipe = photo.recipe
+        do {
+            let data = try Data(contentsOf: originalURL(for: photo), options: [.mappedIfSafe])
+            let hint = photo.typeIdentifier.flatMap(UTType.init)
+            try await loadPhoto(data: data, typeHint: hint, name: photo.name)
+            editingPhotoID = id
+            libraryBusy = nil
+            libraryMessage = nil
+        } catch {
+            libraryBusy = nil
+            libraryMessage = "无法打开 \(photo.name)：\(error.localizedDescription)"
+            state = .failed(error.localizedDescription)
+        }
+    }
+
+    /// Leave the editor and put the current look back on the wall. The recipe
+    /// is saved synchronously; the thumbnail is refreshed right after, so
+    /// returning never waits for a second render.
+    func closeEditor() {
+        guard let id = editingPhotoID else { return }
+        let recipe = currentRecipe
+        let changed = recipe != editingBaseRecipe
+        if let index = library.firstIndex(where: { $0.id == id }) {
+            library[index].recipe = recipe
+            library[index].isEdited = library[index].isEdited || changed
+        }
+        saveLibraryManifest()
+        renderTask?.cancel()
+        editingPhotoID = nil
+        editingBaseRecipe = nil
+        libraryMessage = nil
+        Task { @MainActor [weak self] in
+            await self?.refreshThumbnail(for: id, recipe: recipe)
+        }
+    }
+
+    /// Copy one photo's look for the paste action. The recipe is also written
+    /// to the app's own clipboard (and the system pasteboard as JSON), so it
+    /// survives a relaunch without reading the user's pasteboard unasked.
+    func copyRecipe(from id: UUID) {
+        guard let photo = library.first(where: { $0.id == id }) else { return }
+        clipboardRecipe = photo.recipe
+        recipeSourcePhotoID = id
+        saveClipboardRecipe(photo.recipe)
+        libraryMessage = "已复制 \(filmName(for: photo.recipe.filmStock)) 配方"
+        if let data = try? JSONEncoder().encode(photo.recipe) {
+            UIPasteboard.general.string = "spektralab-recipe:v1:" + data.base64EncodedString()
+        }
+    }
+
+    /// Apply the copied look to every selected photo and refresh each wall
+    /// thumbnail. This is serial on purpose: one engine session is reused, so
+    /// a hundred selected photos do not become a hundred GPU sessions.
+    func pasteRecipe(to ids: Set<UUID>) async {
+        guard let recipe = clipboardRecipe else {
+            libraryMessage = "先在一张照片上复制配方"
+            return
+        }
+        let targets = library.filter {
+            ids.contains($0.id) && $0.id != recipeSourcePhotoID
+        }
+        guard !targets.isEmpty else { return }
+        libraryBusy = "正在粘贴配方 0/\(targets.count)"
+        var failed = 0
+        for (offset, target) in targets.enumerated() {
+            libraryBusy = "正在粘贴配方 \(offset + 1)/\(targets.count)"
+            guard let index = library.firstIndex(where: { $0.id == target.id }) else { continue }
+            library[index].recipe = recipe
+            library[index].isEdited = true
+            do {
+                let image = try await renderThumbnail(for: library[index], recipe: recipe)
+                library[index].thumbnail = image
+                try LibraryThumbnail.saveJPEG(image, to: thumbnailURL(for: target.id))
+            } catch {
+                failed += 1
+            }
+            await Task.yield()
+        }
+        saveLibraryManifest()
+        libraryBusy = nil
+        libraryMessage = failed == 0
+            ? "已把配方粘贴到 \(targets.count) 张照片"
+            : "已粘贴 \(targets.count - failed) 张，\(failed) 张缩略图未更新"
+    }
+
+    /// Delete photos and their on-disk originals. The manifest is rewritten
+    /// after the files are gone, so a crash mid-delete leaves either an entry
+    /// with a missing file (skipped on next launch) or no entry at all.
+    func deletePhotos(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        for id in ids {
+            if let photo = library.first(where: { $0.id == id }) {
+                try? FileManager.default.removeItem(at: originalURL(for: photo))
+            }
+            try? FileManager.default.removeItem(at: thumbnailURL(for: id))
+        }
+        if let editing = editingPhotoID, ids.contains(editing) {
+            editingPhotoID = nil
+            editingBaseRecipe = nil
+        }
+        if let source = recipeSourcePhotoID, ids.contains(source) {
+            recipeSourcePhotoID = nil
+            UserDefaults.standard.removeObject(forKey: Self.clipboardRecipeSourceKey)
+        }
+        library.removeAll { ids.contains($0.id) }
+        saveLibraryManifest()
+        libraryMessage = "已删除 \(ids.count) 张照片"
+    }
+
+    func clearLibraryMessage() {
+        libraryMessage = nil
+    }
+
+    private func refreshThumbnail(for id: UUID, recipe: PhotoRecipe) async {
+        guard let index = library.firstIndex(where: { $0.id == id }) else { return }
+        let previousBusy = libraryBusy
+        libraryBusy = "正在更新缩略图…"
+        defer { libraryBusy = previousBusy }
+        guard let image = try? await renderThumbnail(for: library[index], recipe: recipe) else { return }
+        guard let current = library.firstIndex(where: { $0.id == id }) else { return }
+        library[current].thumbnail = image
+        try? LibraryThumbnail.saveJPEG(image, to: thumbnailURL(for: id))
+        saveLibraryManifest()
+    }
+
+    /// Render one wall-sized print through the real engine. `preview_long_edge`
+    /// is set to the thumbnail size, so this is a lookup-sized render rather
+    /// than a full live-tier one per photo.
+    private func renderThumbnail(for photo: LibraryPhoto, recipe: PhotoRecipe) async throws -> UIImage {
+        guard let engine else { throw EngineError.failed(status: -1, message: "引擎没有启动") }
+        let data = try Data(contentsOf: originalURL(for: photo), options: [.mappedIfSafe])
+        let hintID = photo.typeIdentifier
+        let decoded = try await Task.detached(priority: .userInitiated) {
+            try ImageDecoder.decode(data: data,
+                                    maxLongEdge: 1400,
+                                    typeHint: hintID.flatMap(UTType.init))
+        }.value
+        let sourceAspect = CGFloat(photo.sourceAspect)
+        let gate = FilmGateCatalog.resolve(selection: recipe.overscanFormat,
+                                           imageAspect: sourceAspect)
+        let orientation = FilmStripOrientation(rawValue: recipe.stripOrientation) ?? .automatic
+        let framed = recipe.filmBorderEnabled
+            ? decoded.centerCropped(toTargetAspect: orientation.targetAspect(for: gate,
+                                                                            sourceAspect: sourceAspect))
+            : decoded
+        var delta = recipe.engineDelta(filmName: filmName(for: recipe.filmStock),
+                                       imageAspect: sourceAspect,
+                                       stamp: photo.createdAt,
+                                       shootingData: "1/125  F2.8  ISO 400  50mm")
+        delta[ParamDefaults.productDefaultsKey] = .bool(true)
+        delta["preview_long_edge"] = .number(900)
+        let openDelta = delta
+        let bitmap = try await engine.perform {
+            try framed.pixels.withUnsafeBufferPointer { buffer in
+                guard let base = buffer.baseAddress else {
+                    throw EngineError.failed(status: -1, message: "解码结果为空")
+                }
+                _ = try engine.open(pixels: EnginePixels(data: base,
+                                                         width: framed.width,
+                                                         height: framed.height),
+                                    params: openDelta)
+            }
+            try engine.solve(target: "both")
+            return try engine.renderBitmap(tier: "live", reprint: false)
+        }
+        return LibraryThumbnail.downscale(bitmap.cgImage)
     }
 
     /// Load an already-decoded frame: open a session and render the first

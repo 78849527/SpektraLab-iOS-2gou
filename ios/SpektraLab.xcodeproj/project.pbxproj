@@ -36,6 +36,7 @@
 		};
 		98BA85BA0900B8D0A9F272E6 /* FilmEffects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "FilmEffects.swift"; sourceTree = "<group>"; };
 		43640C977325C2A4780BCB22 /* Params.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Params.swift"; sourceTree = "<group>"; };
+		7C720500C0B7033ECA5EA3A1 /* PhotoLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PhotoLibrary.swift"; sourceTree = "<group>"; };
 		A0F5CBF24A66860B5C20C953 /* StockCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StockCatalog.swift"; sourceTree = "<group>"; };
 		F508BA6EFDF4E702F586E928 /* ViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ViewModel.swift"; sourceTree = "<group>"; };
 		8DC45243D2F7398E45C0638F /* Model */ = {
@@ -43,6 +44,7 @@
 			children = (
 				98BA85BA0900B8D0A9F272E6 /* FilmEffects.swift */,
 				43640C977325C2A4780BCB22 /* Params.swift */,
+				7C720500C0B7033ECA5EA3A1 /* PhotoLibrary.swift */,
 				A0F5CBF24A66860B5C20C953 /* StockCatalog.swift */,
 				F508BA6EFDF4E702F586E928 /* ViewModel.swift */
 			);
@@ -77,8 +79,10 @@
 		9A72AABF55855F3F0A34BBD4 /* AppIcon60x60@3x.png */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "AppIcon60x60@3x.png"; sourceTree = "<group>"; };
 		A3683B4388735BD2619A86E7 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ContentView.swift"; sourceTree = "<group>"; };
 		AC1103EAAEEF5ACAFDF57005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info.plist"; sourceTree = "<group>"; };
+		08561BE9E56B23AE2089EC17 /* PhotoLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PhotoLibraryView.swift"; sourceTree = "<group>"; };
 		E75CF164A8C2B3A55ED5B5F0 /* SpektraLab.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "SpektraLab.entitlements"; sourceTree = "<group>"; };
 		7AE53F13A98BF43AA65EEE82 /* SpektraLabApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SpektraLabApp.swift"; sourceTree = "<group>"; };
+		A76B978C0865F538A0D5E735 /* StockArtwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "StockArtwork.swift"; sourceTree = "<group>"; };
 		0AB3D73FA39AE4D3B3365680 /* SpektraLab */ = {
 			isa = PBXGroup;
 			children = (
@@ -92,8 +96,10 @@
 				9A72AABF55855F3F0A34BBD4 /* AppIcon60x60@3x.png */,
 				A3683B4388735BD2619A86E7 /* ContentView.swift */,
 				AC1103EAAEEF5ACAFDF57005 /* Info.plist */,
+				08561BE9E56B23AE2089EC17 /* PhotoLibraryView.swift */,
 				E75CF164A8C2B3A55ED5B5F0 /* SpektraLab.entitlements */,
-				7AE53F13A98BF43AA65EEE82 /* SpektraLabApp.swift */
+				7AE53F13A98BF43AA65EEE82 /* SpektraLabApp.swift */,
+				A76B978C0865F538A0D5E735 /* StockArtwork.swift */
 			);
 			path = "SpektraLab";
 			sourceTree = "<group>";
@@ -358,13 +364,16 @@
 		F8B8BBC0257FCE5019FE1F65 /* RAWDecodeSupport.m */ = {isa = PBXBuildFile; fileRef = B979BA3409772257ED6ED5E4; };
 		A3C2DA798B33ED4314BD260E /* FilmEffects.swift */ = {isa = PBXBuildFile; fileRef = 98BA85BA0900B8D0A9F272E6; };
 		430B96D64212D930E62FE531 /* Params.swift */ = {isa = PBXBuildFile; fileRef = 43640C977325C2A4780BCB22; };
+		DFA11D3FCF18012C210B07AD /* PhotoLibrary.swift */ = {isa = PBXBuildFile; fileRef = 7C720500C0B7033ECA5EA3A1; };
 		0809FAE36475416270825347 /* StockCatalog.swift */ = {isa = PBXBuildFile; fileRef = A0F5CBF24A66860B5C20C953; };
 		7D24DC526060AE0B2A1B358B /* ViewModel.swift */ = {isa = PBXBuildFile; fileRef = F508BA6EFDF4E702F586E928; };
 		1492D358FF14C4E199F4C8A5 /* CrashLog.swift */ = {isa = PBXBuildFile; fileRef = E726C6EED977FC546A55E678; };
 		93762E92AF6584F513EEBD68 /* DecoderProbe.swift */ = {isa = PBXBuildFile; fileRef = C39BBA92C20564A9C3C8E7FF; };
 		1D7CAE44F4E76C8675A0BC89 /* EngineBridge.swift */ = {isa = PBXBuildFile; fileRef = AA0C4AC58357578FABC8BD73; };
 		D7CF82BAD4EE3CBADCB7819F /* ContentView.swift */ = {isa = PBXBuildFile; fileRef = A3683B4388735BD2619A86E7; };
+		F0875895092AACA537E367C7 /* PhotoLibraryView.swift */ = {isa = PBXBuildFile; fileRef = 08561BE9E56B23AE2089EC17; };
 		6DAB5C398E84F20BCC7A4763 /* SpektraLabApp.swift */ = {isa = PBXBuildFile; fileRef = 7AE53F13A98BF43AA65EEE82; };
+		B68ED6462C8AA27845664990 /* StockArtwork.swift */ = {isa = PBXBuildFile; fileRef = A76B978C0865F538A0D5E735; };
 		E54F9DE04BABC0BCC99295CD /* blob.cpp */ = {isa = PBXBuildFile; fileRef = B01AFC856442B304171AD2E5; };
 		E2C79E14E48F3D39F4A8F7B2 /* cam16.cpp */ = {isa = PBXBuildFile; fileRef = 7FA26EAF281A562DEB0BA119; };
 		D5E749083CA666A5D7D9C0D5 /* colour.cpp */ = {isa = PBXBuildFile; fileRef = 415BF5F702AF216E9DFCB974; };
@@ -480,13 +489,16 @@
 				F8B8BBC0257FCE5019FE1F65 /* RAWDecodeSupport.m */,
 				A3C2DA798B33ED4314BD260E /* FilmEffects.swift */,
 				430B96D64212D930E62FE531 /* Params.swift */,
+				DFA11D3FCF18012C210B07AD /* PhotoLibrary.swift */,
 				0809FAE36475416270825347 /* StockCatalog.swift */,
 				7D24DC526060AE0B2A1B358B /* ViewModel.swift */,
 				1492D358FF14C4E199F4C8A5 /* CrashLog.swift */,
 				93762E92AF6584F513EEBD68 /* DecoderProbe.swift */,
 				1D7CAE44F4E76C8675A0BC89 /* EngineBridge.swift */,
 				D7CF82BAD4EE3CBADCB7819F /* ContentView.swift */,
+				F0875895092AACA537E367C7 /* PhotoLibraryView.swift */,
 				6DAB5C398E84F20BCC7A4763 /* SpektraLabApp.swift */,
+				B68ED6462C8AA27845664990 /* StockArtwork.swift */,
 				E54F9DE04BABC0BCC99295CD /* blob.cpp */,
 				E2C79E14E48F3D39F4A8F7B2 /* cam16.cpp */,
 				D5E749083CA666A5D7D9C0D5 /* colour.cpp */,
@@ -658,7 +670,7 @@
 				CODE_SIGN_ENTITLEMENTS = SpektraLab/SpektraLab.entitlements;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_BITCODE = NO;
@@ -684,7 +696,7 @@
 				INFOPLIST_FILE = SpektraLab/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				MARKETING_VERSION = 1.1.3;
+				MARKETING_VERSION = 1.2.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -717,7 +729,7 @@
 				CODE_SIGN_ENTITLEMENTS = SpektraLab/SpektraLab.entitlements;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = "";
 				ENABLE_BITCODE = NO;
@@ -740,7 +752,7 @@
 				INFOPLIST_FILE = SpektraLab/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				MARKETING_VERSION = 1.1.3;
+				MARKETING_VERSION = 1.2.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = NO;
