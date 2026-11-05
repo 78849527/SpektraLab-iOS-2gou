@@ -99,34 +99,41 @@ enum ImageDecoder {
     ///
     /// - Parameter maxLongEdge: the long edge to scale to, or `nil` for no
     ///   scaling (the export path).
-    static func decode(data: Data, maxLongEdge: Int?) throws -> DecodedFrame {
-        // RAW first. `CIRAWFilter` is what the macOS app uses, and it covers
-        // far more camera formats than ImageIO's `CGImageSource`, whose RAW
-        // support depends on the format and on the iOS version. For anything
-        // that is not RAW this returns nil and the path below runs unchanged.
-        if let raw = CIRAWFilter(imageData: data) {
-            // Core Image defaults are designed for a finished photograph and
-            // may apply a baseline exposure, global tone curve and local tone
-            // mapping. The desktop LibRaw path is linear and has no automatic
-            // brightening, so those defaults make the same RAW look clipped.
-            raw.exposure = 0
-            raw.baselineExposure = 0
-            raw.shadowBias = 0
-            raw.boostAmount = 0
-            raw.boostShadowAmount = 0
-            raw.localToneMapAmount = 0
-            raw.extendedDynamicRangeAmount = 0
-            raw.isGamutMappingEnabled = false
-            // Some iOS versions expose CIRAWFilter's tunable properties
-            // (`scaleFactor` among them) to Swift without implementing their
-            // setters. Touching them raises an Objective-C
-            // unrecognized-selector exception during RAW import, so leave the
-            // filter untouched -- `decode(cgImage:)` applies `maxLongEdge`.
+    static func decode(data: Data, maxLongEdge: Int?, typeHint: UTType? = nil) throws -> DecodedFrame {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
+            throw DecodeError.unreadable("not an image this system recognises")
+        }
 
+        // CIRAWFilter can return a non-nil implementation for ordinary JPEGs
+        // on some iOS releases. Its Swift properties are also not guaranteed
+        // to have Objective-C setters on every concrete implementation; a
+        // setter then raises an exception that Swift cannot catch. Trust the
+        // container type reported by ImageIO and leave the RAW filter at its
+        // supported defaults.
+        if isRAW(source: source, typeHint: typeHint) {
+            let suffix = typeHint?.preferredFilenameExtension ?? "raw"
+            let temporaryURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(suffix)
+            try data.write(to: temporaryURL, options: .atomic)
+            defer { try? FileManager.default.removeItem(at: temporaryURL) }
+
+            guard let raw = CIRAWFilter(imageURL: temporaryURL) else {
+                throw DecodeError.unsupportedFormat(typeHint?.identifier ?? "camera RAW")
+            }
             // The intermediate CGImage is the other big allocation; releasing
             // it before the float conversion keeps the peak lower.
             let rendered = autoreleasepool { () -> CGImage? in
-                guard let output = raw.outputImage else { return nil }
+                guard var output = raw.outputImage else { return nil }
+                if let maxLongEdge {
+                    let extent = output.extent
+                    let current = max(extent.width, extent.height)
+                    if current > CGFloat(maxLongEdge), current.isFinite {
+                        let factor = CGFloat(maxLongEdge) / current
+                        output = output.transformed(by: CGAffineTransform(scaleX: factor,
+                                                                          y: factor))
+                    }
+                }
                 let context = CIContext(options: [.workingColorSpace: NSNull()])
                 return context.createCGImage(output,
                                              from: output.extent,
@@ -134,20 +141,27 @@ enum ImageDecoder {
                                              colorSpace: sRGBSpace)
             }
             if let rendered {
-                return try decode(cgImage: rendered, maxLongEdge: maxLongEdge)
+                return try decode(cgImage: rendered, maxLongEdge: nil)
             }
-        }
-
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
-            throw DecodeError.unreadable("not an image this system recognises")
+            throw DecodeError.unreadable("the RAW decoder produced no image")
         }
         return try decode(source: source, maxLongEdge: maxLongEdge)
+    }
+
+    /// ImageIO's declared container type is the gate for camera RAW handling.
+    /// This intentionally does not infer RAW support from CIRAWFilter alone.
+    static func isRAW(source: CGImageSource, typeHint: UTType? = nil) -> Bool {
+        if typeHint?.conforms(to: .rawImage) == true { return true }
+        guard let identifier = CGImageSourceGetType(source) as String?,
+              let type = UTType(identifier) else { return false }
+        return type.conforms(to: .rawImage)
     }
 
     /// Decode an image from a file URL.
     static func decode(url: URL, maxLongEdge: Int?) throws -> DecodedFrame {
         let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-        return try decode(data: data, maxLongEdge: maxLongEdge)
+        let hint = UTType(filenameExtension: url.pathExtension)
+        return try decode(data: data, maxLongEdge: maxLongEdge, typeHint: hint)
     }
 
     /// Decode an image from a `CGImage` — what the Photos picker hands back.

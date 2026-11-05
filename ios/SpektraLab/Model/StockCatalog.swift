@@ -32,6 +32,8 @@ struct Stock: Identifiable, Hashable, Sendable {
     let support: Support
     /// `negative` or `positive`. A slide has no negative to print from.
     let type: FilmType
+    /// The Mac catalogue's photographed film box, when one is available.
+    let coverURL: URL?
 
     enum Support: String, Sendable {
         case film, paper
@@ -90,7 +92,12 @@ struct StockCatalog: Sendable {
                 continue
             }
             let name = (info["name"] as? String) ?? id
-            let stock = Stock(id: id, name: name, support: support, type: type)
+            let cover = resources
+                .appendingPathComponent("film_covers")
+                .appendingPathComponent(id)
+                .appendingPathExtension("jpg")
+            let stock = Stock(id: id, name: name, support: support, type: type,
+                              coverURL: FileManager.default.fileExists(atPath: cover.path) ? cover : nil)
             switch (support, type) {
             case (.film, .negative): films.append(stock)
             case (.film, .positive): slides.append(stock)

@@ -539,18 +539,25 @@ struct StockTile: View {
         Button(action: action) {
             VStack(spacing: 6) {
                 ZStack {
-                    LinearGradient(colors: [swatch.opacity(0.88), swatch.opacity(0.34)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing)
-                    Image(systemName: stock.support == .film ? "film.stack" : "photo.stack")
-                        .font(.system(size: 25, weight: .light))
-                        .foregroundStyle(Color.white.opacity(0.88))
-                    Text(shortCode)
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
-                        .tracking(0.4)
-                        .foregroundStyle(Color.white.opacity(0.9))
-                        .padding(4)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity,
-                               alignment: .bottomLeading)
+                    if let coverURL = stock.coverURL,
+                       let cover = UIImage(contentsOfFile: coverURL.path) {
+                        Image(uiImage: cover)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        LinearGradient(colors: [swatch.opacity(0.88), swatch.opacity(0.34)],
+                                       startPoint: .topLeading, endPoint: .bottomTrailing)
+                        Image(systemName: stock.support == .film ? "film.stack" : "photo.stack")
+                            .font(.system(size: 25, weight: .light))
+                            .foregroundStyle(Color.white.opacity(0.88))
+                        Text(shortCode)
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
+                            .tracking(0.4)
+                            .foregroundStyle(Color.white.opacity(0.9))
+                            .padding(4)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity,
+                                   alignment: .bottomLeading)
+                    }
                 }
                 .frame(width: 62, height: 62)
                 .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
@@ -596,10 +603,7 @@ struct StockTile: View {
                      brightness: 0.88)
     }
 
-    /// The upstream profiles contain measurements and metadata, but no image
-    /// thumbnails. Use a small generated badge so every stock has a stable,
-    /// recognisable tile instead of reusing the imported photo or showing a
-    /// blank colour square.
+    /// Profiles without a photographed box still get a stable identifier.
     private var shortCode: String {
         stock.id.split(separator: "_")
             .prefix(2)

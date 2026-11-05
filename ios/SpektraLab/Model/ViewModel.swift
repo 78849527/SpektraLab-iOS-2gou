@@ -81,6 +81,7 @@ final class ViewModel: ObservableObject {
 
     /// The picked photo, kept so it can be re-decoded at full size for export.
     private var pickedItem: PhotosPickerItem?
+    private var originalTypeHint: UTType?
     /// Original bytes for the full-resolution export; a preview-only
     /// transferable must never replace them.
     private var originalData: Data?
@@ -210,19 +211,21 @@ final class ViewModel: ObservableObject {
         do {
             let data = try Data(contentsOf: url, options: [.mappedIfSafe])
             guard !data.isEmpty else { throw DecodeError.unreadable("文件为空") }
-            try await importData(data)
+            try await importData(data, typeHint: UTType(filenameExtension: url.pathExtension))
         } catch {
             state = .failed(error.localizedDescription)
             statusText = "导入失败：\(url.lastPathComponent)"
         }
     }
 
-    private func importData(_ data: Data) async throws {
+    private func importData(_ data: Data, typeHint: UTType? = nil) async throws {
         originalData = data
+        originalTypeHint = typeHint
         // The preview decode is small: the live tier renders at 2048 px on
         // the long edge, so a bigger decode buys nothing and costs memory.
         let decoded = try ImageDecoder.decode(data: data,
-                                              maxLongEdge: ImageDecoder.previewLongEdge)
+                                              maxLongEdge: ImageDecoder.previewLongEdge,
+                                              typeHint: typeHint)
         try await loadFrame(decoded)
         statusText = "已载入 \(decoded.width)×\(decoded.height) · \(String(format: "%.1f", decoded.megapixels)) MP"
     }
@@ -418,7 +421,8 @@ final class ViewModel: ObservableObject {
             let result: RenderResult
             do {
                 let full = try ImageDecoder.decode(data: originalData,
-                                                   maxLongEdge: ImageDecoder.exportLongEdge)
+                                                   maxLongEdge: ImageDecoder.exportLongEdge,
+                                                   typeHint: originalTypeHint)
 
                 // Reopen on the export frame with the same stocks and parameters.
                 var delta = ParamDefaults.delta(film: filmStock, paper: printStock)

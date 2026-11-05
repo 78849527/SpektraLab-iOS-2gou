@@ -109,7 +109,7 @@ build_resources() {
 
   echo "==> staging the engine's baked resources"
   rm -rf "$staging"
-  mkdir -p "$staging/profiles" "$staging/io"
+  mkdir -p "$staging/profiles" "$staging/io" "$staging/film_covers"
 
   # The baked constants: 9.4 MB of measured tables. The engine reads this by
   # name out of the resources directory.
@@ -130,6 +130,9 @@ build_resources() {
   cp "$src/profiles/"*.json "$staging/profiles/"
   if [ -d "$product/profiles" ]; then
     cp "$product/profiles/"*.json "$staging/profiles/"
+  fi
+  if [ -d "$product/film_covers" ]; then
+    cp "$product/film_covers/"*.jpg "$staging/film_covers/"
   fi
 
   # The colour profile the export embeds.
