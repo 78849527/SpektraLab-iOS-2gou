@@ -11,3 +11,5 @@
 //  modulemap to write.
 
 #import "spektrafilm/spk_engine.h"
+#import "RAWDecodeSupport.h"
+#import "LibRawDecodeSupport.h"

@@ -30,7 +30,9 @@
 - `engine/src/pipeline/pipeline.cpp:576` — `node_input_cast` 只丢 alpha 通道,
   **不做任何色彩空间转换**
 
-所以 iOS 端用 ImageIO 解码后必须自己做:sRGB → 线性 → 线性 ProPhoto。
+所以 iOS 端不能把 ImageIO 的 8-bit sRGB 结果直接交给引擎。普通 JPEG 由
+`CIContext` 直接 render 到线性 ProPhoto；相机 RAW 由 Core Image 或 LibRaw 直接
+产出线性 ProPhoto，不再经过 8-bit sRGB 中间层。
 
 ## 传递函数:ProPhoto 的不是 sRGB 的
 
@@ -54,17 +56,22 @@ mode 1 (ProPhoto): (v < 16/512)      ? v/16    : pow(v, 1.8)
 
 后果:
 
-- **输入端**:ImageIO 给的是 sRGB 编码,所以解码要用 **sRGB 曲线**(mode 0)——这一步对了。
-- **输出端**:引擎的纹理是 **gamma 编码的 ProPhoto**(`io.output_cctf_encoding = true`,
-  `cctf_mode_for("ProPhoto RGB") == 1`),所以读回来必须用 **ProPhoto 曲线**(mode 1)解码。
+- **输入端**:解码结果已经是线性 ProPhoto,所以 `input_cctf_decoding = false`,引擎不再解码。
+- **输出端**:当前 iOS 配置与 macOS preview host 一致:
+  `output_color_space = "sRGB"`、`output_cctf_encoding = true`。画布把
+  `CAMetalLayer` 标记为 sRGB,不再做 shader 里的传递函数转换。
+- **转换由谁做**:输入和输出的色彩空间转换都交给 Core Image
+  (`CIContext` / `CIRAWFilter` / `CGColorSpace`)。App 不自建颜色矩阵,
+  也不在 Swift 或 Metal 里手写 gamma 变换。
 
 用错的后果分两种:
 
 - 用 sRGB 曲线解 ProPhoto:画面**看起来差不多**,但中调偏移、阴影发灰。安静的错误。
 - 少了解码这一步(直接当线性用):双重编码,画面**压到近乎全黑**。响亮的错误。
 
-画布的 shader(`ios/SpektraLab/Canvas/Canvas.metal`)照抄了引擎的
-`cctf_decode_mode` / `cctf_encode_mode`,连断点 `0.040449936` 都用引擎的那个值。
+画布 shader(`ios/SpektraLab/Canvas/Canvas.metal`)只负责 aspect-fit、缩放和拖动。
+色彩空间由 `CAMetalLayer.colorspace = sRGB` 标记;如果输出色域改了,这里和
+`ParamDefaults` 必须一起改。
 
 ## 引擎的输出契约
 
@@ -72,11 +79,21 @@ mode 1 (ProPhoto): (v < 16/512)      ? v/16    : pow(v, 1.8)
 - `spk_result.row_stride_px` 的单位是**像素**,不是字节,而且每像素是 **4 个 uint16**(RGBA)。
   安卓版在这里翻过车:消费端写成 `rgba16 + y * stride` 会让每行只前进 1/4 行,导出成片横向错乱。
   正确写法是 `rgba16 + y * stride * 4`。
-- iOS 端不用这个指针:纹理的存储是私有的,读不出来,只能 blit 到一个 shared `MTLBuffer`。
-  blit 的行间距是 `bytesPerRow`(我们填 `width * 8`),所以 CPU 侧的索引是 `y * width + x`。
-- 引擎原本创建的纹理只有 `MTLTextureUsageShaderRead`,**没有 `CopySource`**。Metal 不允许从
-  没有 `CopySource` 的纹理里 blit 出来。macOS 版不暴露这个问题,因为它是把纹理*画*出来
-  而不是*读*出来。
+- iOS 导出不再从纹理 blit。`spk_result.rgba16` 已经是一块连续行,应用用
+  `CGDataProvider` 把它直接交给 Core Graphics/ImageIO;provider 的释放回调调用
+  `spk_result_free`,所有权只有一份。
+- 引擎原本创建的纹理只有 `MTLTextureUsageShaderRead`,**没有 `CopySource`**。
+  iOS 补丁仍会补上 `CopySource`,以保留从纹理读回的能力;当前导出路径不再依赖它。
+
+## 界面与片边的边界
+
+界面层只选择胶片、相纸和物理片幅，不绘制假的胶片边框。片基、齿孔、DX 码、
+片边字、格号、日期和 120 拍摄数据都通过引擎的 `overscan_*` 与
+`date_imprint_*` 参数参与显影，因此会继承颗粒、光晕和相纸响应。
+
+片边开启后，引擎要求输入画面的宽高比与所选片幅相符。App 在解码阶段居中裁切，
+并保留照片自身方向：横图使用片幅的“长边 / 短边”，竖图使用它的倒数。Core Image、
+LibRaw 回退和全尺寸导出共用 `ImageDecoder.centerCrop`，避免预览与导出产生不同构图。
 
 ## 为什么自己写 Xcode 工程
 
@@ -99,7 +116,7 @@ mode 1 (ProPhoto): (v < 16/512)      ? v/16    : pow(v, 1.8)
 
 | 排除 | 原因 |
 |---|---|
-| `src/io/` | Windows 主机的 LibRaw / 原生 TIFF I/O。iOS 用 ImageIO 解码 |
+| `src/io/` 中除 `raw_decoder.cpp` / `raw_headroom.cpp` 外的文件 | Windows 主机的原生 TIFF I/O 与辅助代码。iOS 只编译 RAW 兼容策略所需的两个文件 |
 | `src/desktop/` | 桌面控制器 |
 | `src/gpu/vulkan_gpu.cpp` | Vulkan 后端。iOS 是 Metal |
 | `src/pipeline/windows_unported.cpp` | Windows 专用的桩 |
@@ -133,12 +150,23 @@ mode 1 (ProPhoto): (v < 16/512)      ? v/16    : pow(v, 1.8)
    `resources_dir` 必须是**包含**这些文件的目录,而不是文件本身。iOS 端是
    `Bundle.main.resourceURL/engine`。
 
-## 一个还没验证的假设
+## 已经验证的导出路径
 
-引擎的输出纹理的**行间距**在 blit 之后,CPU 侧按 `y * width + x` 索引。
-这依赖 `MTL::TextureDescriptor` 加上 `bytesPerRow = row_stride_px * 8` 之后,blit
-`destinationBytesPerRow = width * 8` 确实给出紧密排列的行。
+`spk_result.rgba16` 是紧密排列的 16-bit RGBA 行,`row_stride_px` 以像素为单位,
+每像素 8 字节。iOS 27.2 模拟器上用 6240×4168 的 Sony ARW 完成全尺寸
+`decode → open → solve → full render → sRGB JPEG` 验证,未再出现导出时的
+内存峰值或横向错行。
 
-这是**推断**,不是验证过的。真机第一次导出时,应该拿一张有清晰水平线条的照片
-(比如建筑的地平线),看导出图有没有斜的条纹。有的话,行间距就是 `row_stride_px * 8` 字节,
-索引要改成 `y * row_stride_px + x`。
+## RAW 解码的两种路径
+
+1. **Core Image**:优先使用文件扩展名对应的 RAW UTI。iOS 27 会把 ARW/NEF 的
+   `CGImageSourceGetType` 报成 `public.tiff`;把该值当成 RAW 提示会丢厂商配置。
+   应用会先用 `CIRAWFilter.nativeSize` 和输出 extent 校验,拒绝内嵌缩略图
+   (Nikon NEF 在 iOS 27 上会返回 120×160)。
+2. **LibRaw 0.22.2**:Core Image 返回空图、缩略图或低分辨率结果时启用。
+   与桌面兼容策略相同:相机白平衡、AHD、无自动提亮、线性 ProPhoto。
+   `ios/Tools/gen-project.py` 在生成工程前会检查 LibRaw 源码,避免链接期才失败。
+
+已在 iOS 27.2 模拟器验证全尺寸 135 与 120/645 片边导出，输出分别为 `6446×5946`
+和 `5658×4188`，JPEG 中片边、日期和拍摄数据完整。目标真机仍需复测相册写入、
+长时间内存峰值和不同 RAW 型号；若真机出现斜条纹，再检查 `row_stride_px` 的行距约定。

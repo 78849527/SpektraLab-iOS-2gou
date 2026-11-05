@@ -8,6 +8,7 @@ engine/
 # metallib are build products, not sources.
 /ios/SpektraLab/Resources/engine/
 /ios/SpektraLab/Resources/engine-assets.bin
+/ios/SpektraLab/AppIcon60x60@*.png
 /ios/SpektraLab.xcodeproj/project.xcworkspace/
 
 # Build products

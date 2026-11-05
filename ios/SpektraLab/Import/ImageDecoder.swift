@@ -1,8 +1,9 @@
 //  ImageDecoder.swift — a photo in, the engine's pixels out.
 //
-//  iOS has no LibRaw: the engine's own `io/raw_decoder.cpp` is the Windows
-//  path, and the macOS app decodes with Core Image. This file does the same
-//  thing for iOS, and it has to do one thing Core Image does not do for free.
+//  Core Image is the primary decoder on iOS. The app also compiles the
+//  engine's LibRaw compatibility path as a fallback for formats Core Image
+//  refuses or only exposes as an embedded thumbnail. This file runs both and
+//  hands the engine one consistent linear ProPhoto frame.
 //
 //  **The engine wants ProPhoto RGB, linear.** Core Image converts directly
 //  from the source profile into the same calibrated float working space used
@@ -19,18 +20,130 @@ import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 
+/// Tightly packed float32 RGB pixels.
+///
+/// Core Image's path already produces a `[Float]`; LibRaw hands us an NSData
+/// that already owns the decoded frame. Keeping both behind one accessor lets
+/// the LibRaw fallback avoid a second full-resolution copy on the way from
+/// the decoder to the engine.
+struct FloatRGBPixels: @unchecked Sendable {
+    /// Owns a frame returned by the LibRaw bridge. The C layer keeps the
+    /// vector alive until `SPKLibRawFrameFree`, so the pixels can go to the
+    /// engine without a full-resolution Swift array copy.
+    private final class LibRawOwner: @unchecked Sendable {
+        let frame: SPKLibRawFrameRef
+        let count: Int
+
+        init(frame: SPKLibRawFrameRef, count: Int) {
+            self.frame = frame
+            self.count = count
+        }
+
+        deinit {
+            SPKLibRawFrameFree(frame)
+        }
+
+        func withUnsafeBufferPointer<T>(
+            _ body: (UnsafeBufferPointer<Float>) throws -> T
+        ) rethrows -> T {
+            guard let pixels = SPKLibRawFramePixels(frame) else {
+                return try body(UnsafeBufferPointer(start: nil, count: 0))
+            }
+            return try body(UnsafeBufferPointer(start: pixels, count: count))
+        }
+    }
+
+    private enum Storage {
+        case floats([Float])
+        case data(Data)
+        case libraw(LibRawOwner)
+    }
+
+    private let storage: Storage
+    let count: Int
+
+    init(_ floats: [Float]) {
+        storage = .floats(floats)
+        count = floats.count
+    }
+
+    init(data: Data, pixelCount: Int) {
+        storage = .data(data)
+        count = pixelCount
+    }
+
+    init(librawFrame: SPKLibRawFrameRef, pixelCount: Int) {
+        storage = .libraw(LibRawOwner(frame: librawFrame, count: pixelCount))
+        count = pixelCount
+    }
+
+    func withUnsafeBufferPointer<T>(
+        _ body: (UnsafeBufferPointer<Float>) throws -> T
+    ) rethrows -> T {
+        switch storage {
+        case .floats(let floats):
+            return try floats.withUnsafeBufferPointer(body)
+        case .data(let data):
+            return try data.withUnsafeBytes { raw in
+                let floats = raw.bindMemory(to: Float.self)
+                return try body(UnsafeBufferPointer(start: floats.baseAddress, count: count))
+            }
+        case .libraw(let owner):
+            return try owner.withUnsafeBufferPointer(body)
+        }
+    }
+
+    func withUnsafeBytes<T>(_ body: (UnsafeRawBufferPointer) throws -> T) rethrows -> T {
+        switch storage {
+        case .floats(let floats):
+            return try floats.withUnsafeBytes(body)
+        case .data(let data):
+            return try data.withUnsafeBytes(body)
+        case .libraw(let owner):
+            return try owner.withUnsafeBufferPointer { floats in
+                try body(UnsafeRawBufferPointer(floats))
+            }
+        }
+    }
+}
+
 /// A decoded frame, in the engine's input space.
-struct DecodedFrame {
+struct DecodedFrame: @unchecked Sendable {
     /// Tightly packed float32, three channels, top row first.
-    let pixels: [Float]
+    let pixels: FloatRGBPixels
     let width: Int
     let height: Int
 
     var megapixels: Double { Double(width * height) / 1_000_000 }
+
+    /// A centred crop to a long/short ratio. The film gate has a fixed shape,
+    /// so enabling its physical edge crops the photograph the way a camera
+    /// gate would. Used for the small preview; export crops while decoding so
+    /// no full-resolution second frame is allocated.
+    func centerCropped(toAspect aspect: CGFloat) -> DecodedFrame {
+        let crop = ImageDecoder.centerCrop(width: width, height: height, aspect: aspect)
+        guard crop.width != width || crop.height != height else { return self }
+        var output = [Float](repeating: 0, count: crop.width * crop.height * 3)
+        pixels.withUnsafeBufferPointer { source in
+            guard let source = source.baseAddress else { return }
+            output.withUnsafeMutableBufferPointer { destination in
+                guard let destination = destination.baseAddress else { return }
+                for row in 0..<crop.height {
+                    let from = ((crop.y + row) * width + crop.x) * 3
+                    let to = row * crop.width * 3
+                    destination.advanced(by: to).update(
+                        from: source.advanced(by: from), count: crop.width * 3)
+                }
+            }
+        }
+        return DecodedFrame(pixels: FloatRGBPixels(output),
+                            width: crop.width,
+                            height: crop.height)
+    }
 }
 
 /// Why a frame could not be decoded.
-enum DecodeError: Error, CustomStringConvertible {
+enum DecodeError: Error, LocalizedError, CustomStringConvertible {
     case unreadable(String)
     case unsupportedFormat(String)
     case emptyImage
@@ -44,6 +157,8 @@ enum DecodeError: Error, CustomStringConvertible {
         case .outOfMemory(let px): "this frame is \(px) pixels, too large to decode on a phone"
         }
     }
+
+    var errorDescription: String? { description }
 }
 
 /// Decodes images into the engine's input space.
@@ -106,47 +221,130 @@ enum ImageDecoder {
     ///
     /// - Parameter maxLongEdge: the long edge to scale to, or `nil` for no
     ///   scaling (the export path).
-    static func decode(data: Data, maxLongEdge: Int?, typeHint: UTType? = nil) throws -> DecodedFrame {
+    static func decode(data: Data, maxLongEdge: Int?, typeHint: UTType? = nil,
+                       aspect: CGFloat? = nil) throws -> DecodedFrame {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
             throw DecodeError.unreadable("not an image this system recognises")
         }
 
         // CIRAWFilter can return a non-nil implementation for ordinary JPEGs
-        // on some iOS releases. Its Swift properties are also not guaranteed
-        // to have Objective-C setters on every concrete implementation; a
-        // setter then raises an exception that Swift cannot catch. Trust the
-        // container type reported by ImageIO and leave the RAW filter at its
-        // supported defaults.
+        // on some iOS releases. Its concrete implementation also varies by
+        // camera format, and a property Swift believes exists can still have
+        // no Objective-C setter. That raises an exception Swift cannot catch,
+        // so the property configuration lives in RAWDecodeSupport.m where it
+        // can be guarded one setter at a time. Trust the container type
+        // reported by ImageIO, never the mere presence of CIRAWFilter.
         if isRAW(source: source, typeHint: typeHint) {
-            let suffix = typeHint?.preferredFilenameExtension ?? "raw"
-            let temporaryURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString)
-                .appendingPathExtension(suffix)
-            try data.write(to: temporaryURL, options: .atomic)
-            defer { try? FileManager.default.removeItem(at: temporaryURL) }
+            // The identifier is what tells Core Image which maker profile to
+            // use. A generic container type (`public.tiff`, or DNG for every
+            // file) loses that profile. Prefer a real RAW UTI from ImageIO,
+            // then the caller's extension-based hint.
+            let identifier = rawIdentifier(source: source, typeHint: typeHint)
+#if DEBUG
+            let forceLibRaw = ProcessInfo.processInfo.environment["SPEKTRAFILM_FORCE_LIBRAW"] == "1"
+#else
+            let forceLibRaw = false
+#endif
+            if !forceLibRaw, let output = SPKDecodeRAWImage(data, identifier) {
+                // A filter object can exist while its `outputImage` is empty,
+                // and iOS can also answer with an embedded thumbnail instead
+                // of the sensor frame (Nikon NEF does this on iOS 27). Both
+                // are failures for this app: the first has no pixels, the
+                // second silently exports a 120x160 postage stamp. Compare
+                // the long edge against the size ImageIO reports for the
+                // file before trusting the Core Image result.
+                let declared = declaredPixelSize(source: source)
+                if !isPlausibleRAWExtent(output.extent, declared: declared) {
+                    NSLog("SpektraLab Core Image RAW returned %dx%d; using LibRaw",
+                          Int(output.extent.width), Int(output.extent.height))
+                } else {
+                    do {
+                        return try pixels(from: output, maxLongEdge: maxLongEdge, aspect: aspect)
+                    } catch {
+                        NSLog("SpektraLab Core Image RAW path failed for %@: %@",
+                              identifier ?? "unknown", error.localizedDescription)
+                    }
+                }
+            }
 
-            guard let raw = CIRAWFilter(imageURL: temporaryURL) else {
-                throw DecodeError.unsupportedFormat(typeHint?.identifier ?? "camera RAW")
+            // Apple's RAW support is a camera profile table, not a universal
+            // decoder. A format can be missing, return an empty image, or
+            // expose only its preview, and that set differs between macOS and
+            // iOS. Fall back to the same pinned LibRaw release and the same
+            // linear-ProPhoto policy the Mac engine uses.
+            var width = 0
+            var height = 0
+            let suffix = typeHint?.preferredFilenameExtension
+                ?? UTType(identifier ?? "")?.preferredFilenameExtension
+            guard let decoded = SPKLibRawDecode(
+                data,
+                suffix,
+                maxLongEdge ?? 0,
+                aspect.map(Double.init) ?? 0,
+                &width,
+                &height
+            ) else {
+                let message = String(cString: SPKLibRawLastError())
+                throw DecodeError.unreadable(message.isEmpty
+                    ? "Apple RAW and the bundled LibRaw decoder both refused this file"
+                    : message)
             }
-            // Match Mac 1.3.5's linear RAW look. These setters are only used
-            // after ImageIO has positively identified a camera RAW container;
-            // ordinary JPEGs never construct a CIRAWFilter.
-            if raw.isLensCorrectionSupported { raw.isLensCorrectionEnabled = false }
-            raw.isDraftModeEnabled = false
-            raw.boostAmount = 0
-            raw.boostShadowAmount = 0
-            raw.isGamutMappingEnabled = false
-            raw.localToneMapAmount = 0
-            raw.extendedDynamicRangeAmount = 0
-            guard let output = raw.outputImage else {
-                throw DecodeError.unreadable("the RAW decoder produced no image")
+            guard width > 0, height > 0 else {
+                SPKLibRawFrameFree(decoded)
+                throw DecodeError.emptyImage
             }
-            return try pixels(from: output, maxLongEdge: maxLongEdge)
+            return DecodedFrame(
+                pixels: FloatRGBPixels(librawFrame: decoded,
+                                       pixelCount: width * height * 3),
+                width: width,
+                height: height
+            )
         }
         guard let image = CIImage(data: data, options: [.applyOrientationProperty: true]) else {
             throw DecodeError.unreadable("Core Image could not decode this image")
         }
-        return try pixels(from: image, maxLongEdge: maxLongEdge)
+        return try pixels(from: image, maxLongEdge: maxLongEdge, aspect: aspect)
+    }
+
+    /// The UTI that describes the camera container, not the TIFF shell it is
+    /// wrapped in. iOS reports Sony ARW and Nikon NEF as `public.tiff`; giving
+    /// that to CIRAWFilter strips the maker profile it needs. The extension
+    /// hint is a real RAW UTI, so it wins over a generic container type.
+    private static func rawIdentifier(source: CGImageSource, typeHint: UTType?) -> String? {
+        let detected = CGImageSourceGetType(source) as String?
+        if let detected,
+           UTType(detected)?.conforms(to: .rawImage) == true {
+            return detected
+        }
+        if let typeHint, typeHint.conforms(to: .rawImage) {
+            return typeHint.identifier
+        }
+        return detected ?? typeHint?.identifier
+    }
+
+    /// The full frame size ImageIO reports for a file, before any decode.
+    private static func declaredPixelSize(source: CGImageSource) -> CGSize? {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                as? [CFString: Any],
+              let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue,
+              let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue,
+              width > 0, height > 0 else { return nil }
+        return CGSize(width: width, height: height)
+    }
+
+    /// A RAW filter may downscale by whole factors, but it must not return an
+    /// embedded preview. Half the declared long edge leaves room for a 2x
+    /// scale factor. The fixed floor catches files where iOS reports the
+    /// preview's size as the file's size too -- Nikon NEF does exactly that
+    /// on iOS 27, with a 160x120 "native" frame for a 6048x4024 sensor.
+    private static func isPlausibleRAWExtent(_ extent: CGRect, declared: CGSize?) -> Bool {
+        guard !extent.isInfinite, !extent.isEmpty else { return false }
+        let outputLongEdge = max(extent.width, extent.height)
+        var required: CGFloat = 1024
+        if let declared {
+            required = max(required, max(declared.width, declared.height) * 0.5)
+        }
+        return outputLongEdge >= required
     }
 
     /// ImageIO's declared container type is the gate for camera RAW handling.
@@ -192,14 +390,25 @@ enum ImageDecoder {
     /// Core Image performs the complete source-profile conversion directly
     /// into float32 linear ProPhoto, matching Mac 1.3.5 without an 8-bit sRGB
     /// intermediate or a hand-written colour matrix.
-    private static func pixels(from source: CIImage, maxLongEdge: Int?) throws -> DecodedFrame {
+    private static func pixels(from source: CIImage, maxLongEdge: Int?,
+                               aspect: CGFloat? = nil) throws -> DecodedFrame {
         guard let colorSpace = linearProPhoto else {
             throw DecodeError.unreadable("linear ProPhoto RGB is unavailable")
         }
         var image = source
-        let sourceExtent = image.extent
+        var sourceExtent = image.extent
         guard !sourceExtent.isInfinite, !sourceExtent.isEmpty else {
             throw DecodeError.emptyImage
+        }
+        if let aspect {
+            let crop = centerCrop(width: Int(sourceExtent.width.rounded()),
+                                  height: Int(sourceExtent.height.rounded()),
+                                  aspect: aspect)
+            sourceExtent = CGRect(x: sourceExtent.origin.x + CGFloat(crop.x),
+                                  y: sourceExtent.origin.y + CGFloat(crop.y),
+                                  width: CGFloat(crop.width),
+                                  height: CGFloat(crop.height))
+            image = image.cropped(to: sourceExtent)
         }
         if let maxLongEdge {
             let current = max(sourceExtent.width, sourceExtent.height)
@@ -229,7 +438,27 @@ enum ImageDecoder {
             rgb[pixel * 3 + 1] = rgba[pixel * 4 + 1]
             rgb[pixel * 3 + 2] = rgba[pixel * 4 + 2]
         }
-        return DecodedFrame(pixels: rgb, width: width, height: height)
+        return DecodedFrame(pixels: FloatRGBPixels(rgb), width: width, height: height)
+    }
+
+    /// The integer rectangle used by both the Core Image and LibRaw paths.
+    /// `aspect` is long edge over short edge. The crop keeps the photograph's
+    /// own orientation: a portrait frame is cropped to the reciprocal, so a
+    /// vertical 3:2 photograph becomes 2:3 and not a sideways landscape.
+    static func centerCrop(width: Int, height: Int, aspect: CGFloat) -> (x: Int, y: Int, width: Int, height: Int) {
+        guard width > 0, height > 0, aspect.isFinite, aspect > 0 else {
+            return (0, 0, max(width, 1), max(height, 1))
+        }
+        let sourceAspect = CGFloat(width) / CGFloat(height)
+        let targetAspect = sourceAspect >= 1 ? aspect : 1 / aspect
+        var cropWidth = width
+        var cropHeight = height
+        if sourceAspect > targetAspect {
+            cropWidth = max(1, min(width, Int((CGFloat(height) * targetAspect).rounded())))
+        } else if sourceAspect < targetAspect {
+            cropHeight = max(1, min(height, Int((CGFloat(width) / targetAspect).rounded())))
+        }
+        return ((width - cropWidth) / 2, (height - cropHeight) / 2, cropWidth, cropHeight)
     }
 
     private static func decodeImage(source: CGImageSource, maxLongEdge: Int?) -> CGImage? {

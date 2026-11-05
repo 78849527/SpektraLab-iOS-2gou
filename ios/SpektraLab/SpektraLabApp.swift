@@ -12,6 +12,9 @@ struct SpektraLabApp: App {
     @StateObject private var model = ViewModel()
 
     init() {
+#if DEBUG
+        DecoderProbe.runIfRequested()
+#endif
         // Before anything else can fail: import crashes here never reach a
         // `catch`, so this is the only way the app can report its own death.
         CrashLog.install()

@@ -21,8 +21,9 @@ separate static-library target would add a second place for the include paths
 to drift. Three groups are excluded, and the reasons are not the same:
 
   * `src/io/` and `src/desktop/` -- the Windows hosts' LibRaw/native-TIFF I/O
-    and the desktop controller. iOS decodes with ImageIO (`ImageDecoder.swift`)
-    and has no desktop.
+    and the desktop controller. iOS decodes ordinary files with ImageIO and
+    camera RAW with `ImageDecoder.swift`; the two files it needs from `io/`
+    are added explicitly below.
   * `src/gpu/vulkan_gpu.cpp` -- the Vulkan backend. iOS is Metal.
   * `src/pipeline/windows_unported.cpp` and `src/pipeline/imprint_raster.cpp`
     -- Windows-only stubs and the non-Apple imprint rasteriser. The Apple
@@ -49,12 +50,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]          # ios/
 REPO = ROOT.parent                                   # the repository root
 ENGINE = REPO / "engine"
+LIBRAW = Path(os.environ.get("SPEKTRALAB_LIBRAW_SOURCE",
+                             REPO / "build/deps/LibRaw-0.22.2"))
 
 APP = "SpektraLab"
 PRODUCT_NAME = "SpektraLab"
 IOS_MIN = "27.0"
-MARKETING_VERSION = "1.0.0"
-BUILD_NUMBER = "1"
+MARKETING_VERSION = "1.1.0"
+BUILD_NUMBER = "2"
 
 # Signing, from the environment: a development certificate is not in this
 # repository and must not be.
@@ -95,6 +98,31 @@ def engine_sources() -> list[Path]:
     )
 
 
+def libraw_sources() -> list[Path]:
+    """The pinned LibRaw implementation used by the camera-RAW fallback.
+
+    Core Image's RAW support is a camera-profile table and rejects several
+    formats that the Mac app can decode. LibRaw is the same release and the
+    same compatibility policy as the Mac/Windows engine, so it is compiled
+    into the iOS target rather than introducing a second colour path.
+    """
+    if not (LIBRAW / "libraw/libraw.h").is_file():
+        raise SystemExit(
+            f"LibRaw headers not found at {LIBRAW}/libraw/libraw.h.\n"
+            "Run engine/setup-libraw.sh first. The iOS RAW fallback needs "
+            "the pinned LibRaw 0.22.2 source; omitting it makes the project "
+            "generate successfully and fail later at link time."
+        )
+    sources = sorted((LIBRAW / "src").rglob("*.cpp"))
+    sources = [p for p in sources if not p.name.endswith("_ph.cpp")]
+    if not sources:
+        raise SystemExit(
+            f"LibRaw source tree at {LIBRAW} has no .cpp files. "
+            "Remove it and rerun engine/setup-libraw.sh."
+        )
+    return sources
+
+
 def relative_to_project(path: Path) -> str:
     """A path spelled relative to the .xcodeproj's directory."""
     return Path(os.path.relpath(path, ROOT)).as_posix()
@@ -104,6 +132,8 @@ def file_type(p: Path) -> str:
     return {
         ".swift": "sourcecode.swift",
         ".metal": "sourcecode.metal",
+        ".m": "sourcecode.c.objc",
+        ".mm": "sourcecode.cpp.objcpp",
         ".cpp": "sourcecode.cpp.cpp",
         ".h": "sourcecode.c.h",
         ".hpp": "sourcecode.cpp.h",
@@ -163,7 +193,11 @@ def build() -> str:
     # The engine's translation units, as references outside the project tree.
     engine_files: list[tuple[str, Path]] = []
     engine_children = []
-    for src in engine_sources():
+    native_sources = engine_sources() + [
+        ENGINE / "src/io/raw_decoder.cpp",
+        ENGINE / "src/io/raw_headroom.cpp",
+    ] + libraw_sources()
+    for src in native_sources:
         fid = uid("file:engine:" + relative_to_project(src))
         p.add(fid,
               f'{{isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; '
@@ -206,7 +240,7 @@ def build() -> str:
               f'\t\t\trunOnlyForDeploymentPostprocessing = 0;\n\t\t}}', tag)
         return pid
 
-    is_src = lambda q: q.suffix in (".swift", ".metal", ".cpp")
+    is_src = lambda q: q.suffix in (".swift", ".metal", ".cpp", ".m", ".mm")
     # `.png` included: `CFBundleIconFiles` names `AppIcon60x60`, and iOS looks
     # that up as `AppIcon60x60@2x.png` at the bundle root. Without this the
     # staged icons never made it into the .app.
@@ -232,7 +266,13 @@ def build() -> str:
         "HEADER_SEARCH_PATHS": "(\n" + "".join(
             f'\t\t\t\t\t"$(SRCROOT)/../engine/{sub}",\n'
             for sub in ("include", "src", "src/core", "third_party/metal-cpp")
-        ) + "\t\t\t\t)",
+        ) + f'\t\t\t\t\t"{relative_to_project(LIBRAW)}",\n'
+            + "\t\t\t\t)",
+        "GCC_PREPROCESSOR_DEFINITIONS": "(\n"
+            "\t\t\t\t\t\"$(inherited)\",\n"
+            "\t\t\t\t\t\"LIBRAW_NODLL=1\",\n"
+            "\t\t\t\t\t\"LIBRAW_NOTHREADS=1\",\n"
+            "\t\t\t\t)",
         "SWIFT_OBJC_BRIDGING_HEADER": f'"{APP}/Service/{APP}-Bridging-Header.h"',
         # Metal, QuartzCore and Accelerate are the ones the engine links;
         # CoreGraphics and CoreText are what `overscan.cpp` rasterises the

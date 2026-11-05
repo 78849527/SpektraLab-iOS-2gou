@@ -51,6 +51,15 @@ else
   echo "warning: Pillow is not installed (pip install Pillow); the app will ship without a custom icon." >&2
 fi
 
+# `CFBundleIconFiles` names `AppIcon60x60`; iOS looks for the @2x and @3x
+# files beside the executable. The asset catalog alone is not enough here
+# because `INFOPLIST_ENABLE_CFBUNDLEICONS_MERGE` is off so the hand-written
+# CFBundleIcons survives. A device with only the @2x file shows a missing or
+# fallback home-screen icon.
+iconset=ios/SpektraLab/Assets.xcassets/AppIcon.appiconset
+cp "$iconset/icon-60@2x.png" ios/SpektraLab/AppIcon60x60@2x.png
+cp "$iconset/icon-60@3x.png" ios/SpektraLab/AppIcon60x60@3x.png
+
 echo "==> the Xcode project"
 python3 ios/Tools/gen-project.py
 

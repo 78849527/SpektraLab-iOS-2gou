@@ -1,15 +1,75 @@
 # 交接说明 — SpektraLab-iOS IPA 构建
 
 > 给接手继续修的 agent。本文记录**当前精确状态**、**已踩过的坑**、**剩余问题**和**建议方案**。
-> 最后更新：2026-11-03
+> 最后更新：2026-11-05
 
 ## 一句话现状
 
-> 2026-11-05 补充：当前开发目标已统一为 iOS 27.0 / Xcode 27.2。预览比例、缩放、
-> sRGB 色彩管线、Sony ARW 文件导入入口和分块 JPEG 导出已经完成；真机重新连接后仍需
-> 逐项验证 Sony ARW、Apple RAW/DNG、JPEG、胶片切换、相册写入和导出颜色。Xcode 27
-> 的 simulator Metal 编译必须显式传 `--target=air64-apple-ios27.0-simulator`，否则即使
-> 使用 `iphonesimulator` SDK 也会生成 device metallib。
+> 2026-11-05 最新状态（v1.1.0，发布中）：
+>
+> - 开发目标仍是 iOS 27.0 / Xcode 27.2。
+> - 界面已重做：顶部实时显示胶片/相纸，预览自适应，单指点按进入沉浸模式，
+>   底部收为单行片库；长胶片名与长相纸名可显示两行。
+> - 片边与日期后背已接入上游引擎的真实曝光模型：片基、齿孔、DX、片边字、格号、
+>   日期和 120 拍摄数据都与画面一起显影，不是 SwiftUI 叠层。
+> - 片边裁切已修正竖图方向：横图使用片幅长/短比，竖图使用其倒数；Core Image、
+>   LibRaw 回退和全尺寸导出使用同一规则。
+> - RAW 类型提示已修正：iOS 把 ARW/NEF 报成 `public.tiff`，现在优先使用扩展名对应的
+>   真实 RAW UTI；Core Image 现在能对 Sony ARW 返回 6192×4128 全尺寸画面。
+> - Core Image 返回空图或内嵌缩略图（Nikon NEF 在 iOS 27 会返回 120×160）时，
+>   自动回退到内置 LibRaw 0.22.2，色彩策略与桌面 1.3.5 一致。
+> - 输出回到 macOS preview host 的 sRGB 约定；色彩空间转换全部交给 Core Image，
+>   App 不自建转换矩阵。画布用同一 sRGB 标记，不做二次转换。
+> - 导出改为直接编码 `spk_result.rgba16`，去掉 RGBA8 全图副本和纹理分块读回。
+> - iOS 27.2 模拟器已验证：ARW / CR3 / NEF / JPEG 解码；NEF 竖图方向；2× 缩放；
+>   曝光补偿 `+1.50` 可正常渲染且无报错；竖版 135 片边保持竖向。
+> - 全尺寸片边导出已验证：135 + 日期为 `6446×5946`，120/645 + 日期为 `5658×4188`。
+>   输出 JPEG 中齿孔、片边字、格号、日期与拍摄数据均完整。
+> - 仍未在目标真机上复测相册写入、长时间内存和胶片切换。
+> - 真机无签名包已按 `repack-ipa.py` 生成，版本为 `1.1.0 (2)`；CI 成功后会替换
+>   `latest` Release。
+>
+> Xcode 27 的 simulator Metal 编译必须显式传
+> `--target=air64-apple-ios27.0-simulator`，否则即使使用 `iphonesimulator` SDK
+> 也会生成 device metallib。
+
+### 本地复测 RAW / 导出
+
+DEBUG 构建带一个启动探针。把样片放进模拟器沙盒后：
+
+```bash
+C=$(xcrun simctl get_app_container booted com.hanze.spektralab data)
+mkdir -p "$C/Documents/rawtest"
+cp /path/to/*.ARW "$C/Documents/rawtest/"
+
+SIMCTL_CHILD_SPEKTRAFILM_DECODER_TEST_DIR="$C/Documents/rawtest"   xcrun simctl launch --terminate-running-process --console-pty   booted com.hanze.spektralab
+```
+
+结果写到 `$C/Documents/decoder-probe.txt`。要跑完整
+`decode → engine → sRGB JPEG`：
+
+```bash
+SIMCTL_CHILD_SPEKTRAFILM_RENDER_TEST_PATH="$C/Documents/rawtest/photo.ARW" SIMCTL_CHILD_SPEKTRAFILM_RENDER_TEST_FULL=1   xcrun simctl launch --terminate-running-process --console-pty   booted com.hanze.spektralab
+```
+
+`SPEKTRAFILM_RENDER_TEST_SAVE=1` 会再写一次相册。
+`SPEKTRAFILM_FORCE_LIBRAW=1` 可强制走 LibRaw，用来和 Core Image 对色。
+这两个开关只在 DEBUG 构建生效。
+
+片边与日期的全尺寸探针可再加：
+
+```bash
+SIMCTL_CHILD_SPEKTRAFILM_RENDER_TEST_BORDER=1 \
+SIMCTL_CHILD_SPEKTRAFILM_RENDER_TEST_GATE=135 \
+SIMCTL_CHILD_SPEKTRAFILM_RENDER_TEST_DATE=1
+```
+
+输出写到 `$C/Documents/render-test.jpg`；失败时写 `render-probe-error.txt`。
+
+打真机 IPA 之前必须先执行 `ios/Tools/build-engine.sh bundle device`，
+否则会把模拟器 metallib 打进包；打包用
+`python3 ios/Tools/repack-ipa.py <dir-with-Payload> <out.ipa>`，
+不要用 `zip` 或 `ditto -c -k`。
 
 **CI 已全绿：`Build` → `Package the IPA` → `Publish the IPA` 全部通过，
 每轮 main 上的成功构建会把 IPA 发到一个滚动的 `latest` release，README 顶部有直链。**

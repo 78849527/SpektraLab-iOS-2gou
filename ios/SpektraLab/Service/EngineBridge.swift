@@ -23,6 +23,7 @@
 
 import Foundation
 import Metal
+import CoreGraphics
 import CryptoKit
 
 // MARK: - Errors
@@ -72,14 +73,20 @@ enum EngineStatus {
 
 /// One engine, and the session opened on it.
 ///
-/// Not an `actor`: the C API is called from the main actor in this app (the
-/// engine locks per session and the calls are short), and an actor would put
-/// a `await` between every step of a render for no gain. The macOS app uses an
-/// actor because it also drives a scheduler; iOS renders on demand instead.
-final class SpektraEngine {
+/// Not an `actor`: the C API is not async, and the app needs to group several
+/// calls (`open`, `solve`, `render`) into one uninterrupted unit. A private
+/// serial queue gives that grouping while keeping long renders off the main
+/// actor.
+final class SpektraEngine: @unchecked Sendable {
     private let engine: OpaquePointer
     /// The engine retains the device, so the app keeps its own reference too.
     let device: MTLDevice
+
+    /// Every engine call runs here, in order. The engine owns one session and
+    /// large GPU allocations, so concurrent renders are neither useful nor
+    /// safe. A serial queue also keeps the thread-local `spk_last_error`
+    /// paired with the call that produced it.
+    private let queue = DispatchQueue(label: "app.spektralab.engine", qos: .userInitiated)
 
     /// Where the baked constants, the film profiles and the metallib live.
     ///
@@ -123,6 +130,25 @@ final class SpektraEngine {
         // That order is deliberate on the C++ side too.
         if let session { spk_session_release(session) }
         spk_engine_destroy(engine)
+    }
+
+    /// Run one or more engine operations on the serial engine queue.
+    ///
+    /// The autorelease pool is not incidental: metal-cpp hands back
+    /// autoreleased objects, and a full-resolution export otherwise leaves a
+    /// large collection of them alive until the next main-run-loop drain.
+    func perform<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                autoreleasepool {
+                    do {
+                        continuation.resume(returning: try operation())
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+        }
     }
 
     private var session: OpaquePointer?
@@ -461,6 +487,88 @@ final class SpektraEngine {
                             progressID: progressID)
     }
 
+    /// Render straight into a Core Graphics image that owns the engine rows.
+    ///
+    /// This is the export path. It deliberately does not take ownership of
+    /// `result.texture`: the result handle stays alive through the
+    /// `CGDataProvider` and `spk_result_free` releases the texture when Core
+    /// Graphics is finished. That gives JPEG encoding a zero-copy 16-bit
+    /// sRGB source instead of three full-frame CPU copies.
+    func renderBitmap(tier: String = "full", reprint: Bool = false) throws -> RenderedBitmap {
+        guard let session else { throw EngineError.failed(status: -1, message: "no session is open") }
+        var result = spk_result()
+        let status = tier.withCString { tierPtr in
+            reprint ? spk_reprint(session, tierPtr, &result) : spk_render(session, tierPtr, &result)
+        }
+        guard status == EngineStatus.ok else {
+            throw EngineError.failed(status: status, message: lastError)
+        }
+        guard let cgImage = Self.makeCGImage(from: &result) else {
+            spk_result_free(&result)
+            throw EngineError.failed(status: -1, message: "引擎没有返回可导出的图像")
+        }
+        return RenderedBitmap(cgImage: cgImage,
+                              width: Int(result.width),
+                              height: Int(result.height),
+                              elapsedMs: result.elapsed_ms)
+    }
+
+    /// Box `spk_result` so Core Graphics can release the engine pixels itself.
+    /// The result owns both the texture and the `rgba16` rows; freeing it after
+    /// the provider is released is the only correct lifetime.
+    private static func makeCGImage(from result: inout spk_result) -> CGImage? {
+        guard let rows = result.rgba16,
+              result.width > 0, result.height > 0,
+              result.row_stride_px >= result.width else {
+            return nil
+        }
+        let width = Int(result.width)
+        let height = Int(result.height)
+        let stride = Int(result.row_stride_px) * 8
+        guard stride * height > 0 else { return nil }
+
+        let boxed = UnsafeMutablePointer<spk_result>.allocate(capacity: 1)
+        boxed.initialize(to: result)
+        // Ownership has moved into `boxed`. Clear the two owning fields on the
+        // caller's copy so its failure path cannot free the same texture a
+        // second time after the provider callback has already done so.
+        result.texture = nil
+        result.rgba16 = nil
+        let release: CGDataProviderReleaseDataCallback = { info, _, _ in
+            guard let info else { return }
+            let pointer = info.assumingMemoryBound(to: spk_result.self)
+            spk_result_free(pointer)
+            pointer.deinitialize(count: 1)
+            pointer.deallocate()
+        }
+        guard let provider = CGDataProvider(
+            dataInfo: boxed,
+            data: UnsafeRawPointer(rows),
+            size: stride * height,
+            releaseData: release
+        ) else {
+            spk_result_free(boxed)
+            boxed.deinitialize(count: 1)
+            boxed.deallocate()
+            return nil
+        }
+
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue
+                                      | CGBitmapInfo.byteOrder16Little.rawValue)
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        return CGImage(width: width,
+                       height: height,
+                       bitsPerComponent: 16,
+                       bitsPerPixel: 64,
+                       bytesPerRow: stride,
+                       space: colorSpace,
+                       bitmapInfo: bitmapInfo,
+                       provider: provider,
+                       decode: nil,
+                       shouldInterpolate: true,
+                       intent: .defaultIntent)
+    }
+
     /// Ask the engine to stop a render in flight. Safe from another thread;
     /// the render unwinds at the next node boundary.
     func cancel(progressID: String? = nil) {
@@ -498,7 +606,7 @@ struct DevicePixels {
 }
 
 /// What a render left behind.
-struct RenderResult {
+struct RenderResult: @unchecked Sendable {
     /// The rendered pixels. Owned by the caller.
     let texture: MTLTexture?
     let width: Int
@@ -517,18 +625,30 @@ struct RenderResult {
     let progressID: String
 }
 
+/// A full-resolution render already packaged for ImageIO.
+///
+/// `CGImage` keeps the provider alive, and the provider's release callback
+/// returns the engine result exactly once. Nothing in the export path copies
+/// the 16-bit frame on the CPU.
+struct RenderedBitmap: @unchecked Sendable {
+    let cgImage: CGImage
+    let width: Int
+    let height: Int
+    let elapsedMs: Double
+}
+
 // MARK: - Replies
 
 /// The engine's replies, decoded. Only the fields this app reads are modelled;
 /// the engine sends more, and `JSONDecoder` ignores what it does not know.
-struct OpenReply: Decodable {
-    struct Meta: Decodable {
+struct OpenReply: Decodable, Sendable {
+    struct Meta: Decodable, Sendable {
         let width: Int?
         let height: Int?
         let megapixels: Double?
         let source: String?
     }
-    struct DetectedInput: Decodable {
+    struct DetectedInput: Decodable, Sendable {
         let inputColorSpace: String?
         // The engine emits this as a JSON *boolean* (`params.io.input_cctf_
         // decoding` is a C++ `bool`), so decoding it as `String?` throws and
@@ -556,7 +676,11 @@ struct OpenReply: Decodable {
 }
 
 struct SetParamsReply: Decodable {
-    let invalidated: Bool?
+    /// The engine names the pipeline stage it invalidated: `"shoot"` or
+    /// `"print"`. It is a string, not a boolean; decoding it as `Bool` made
+    /// the first slider move fail with a `badReply` error even though the
+    /// parameters had been applied.
+    let invalidated: String?
     let params: [String: ParamValue]?
 }
 

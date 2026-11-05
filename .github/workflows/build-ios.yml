@@ -135,6 +135,15 @@ jobs:
           fi
       - name: Patch the engine for iOS
         run: python3 tools/apply-ios-patch.py engine
+      # Core Image's iOS camera table is smaller than macOS's, and some
+      # formats only expose an embedded preview. The app falls back to the
+      # same pinned LibRaw release the Mac/Windows build uses, so that source
+      # has to exist before the Xcode project is generated. `gen-project.py`
+      # fails on purpose if it is missing: silently omitting LibRaw produces a
+      # project that compiles Swift but fails at link time thousands of lines
+      # later.
+      - name: Fetch LibRaw
+        run: bash engine/setup-libraw.sh
       # From Xcode 16 the Metal compiler is a separate component on some
       # images; asking for it before compiling the kernels turns a confusing
       # failure into a line of output.

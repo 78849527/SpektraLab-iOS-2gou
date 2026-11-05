@@ -31,11 +31,6 @@ struct OutputTransform {
 /// Draws the engine's texture into an `MTKView`.
 @MainActor
 final class CanvasRenderer: NSObject, MTKViewDelegate {
-    /// `CanvasTransform` is three Metal float3 columns (16 bytes each), then
-    /// four uints and padding: 80 bytes total. Keep the frame rectangle after
-    /// that struct; the old 16-byte offset overwrote matrix row 2 and made
-    /// every rendered photo turn magenta as soon as the shader ran.
-    private static let frameBufferOffset = 80
     let device: MTLDevice
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
@@ -43,12 +38,18 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
     /// The texture to draw. Set by the view model when a render lands.
     private(set) var texture: MTLTexture?
 
-    /// The iOS engine is configured with the same sRGB output as the desktop
-    /// preview host. The canvas must not apply a second ProPhoto transform.
+    /// The engine's output is transfer-encoded sRGB, matching the macOS
+    /// preview host. The Metal drawable is tagged with the same space, so the
+    /// canvas must not apply a second ProPhoto or gamma transform.
     var transform: OutputTransform = .identity
 
     /// The transform's parameters, uploaded to the GPU once per change.
     private var transformBuffer: MTLBuffer?
+    /// The aspect-fit rectangle. It is a separate binding instead of a tail
+    /// field in `transformBuffer`: the MSL and Swift struct layouts must agree
+    /// byte for byte, and a mismatch there silently shrinks or clips the
+    /// picture rather than producing a visible shader error.
+    private var frameBuffer: MTLBuffer?
     private var sourceAspect: CGFloat?
     private var drawableAspect: CGFloat = 2.0 / 3.0
     private var zoom: CGFloat = 1
@@ -97,6 +98,7 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
         // gamut-compression constants the fragment shader reads.
         let buffer = device.makeBuffer(length: 256, options: .storageModeShared)
         transformBuffer = buffer
+        frameBuffer = device.makeBuffer(length: 16, options: .storageModeShared)
         super.init()
         uploadTransform()
     }
@@ -159,21 +161,45 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
     /// actual MTKView aspect is used, so portrait, landscape and square photos
     /// all fit instead of being sampled through a fixed 2:3 window.
     private func uploadFrame() {
-        guard let transformBuffer, let aspect = sourceAspect, aspect > 0 else { return }
-        var width = CGFloat(1)
-        var height = CGFloat(1)
+        guard let frameBuffer, let aspect = sourceAspect, aspect > 0 else { return }
+        // Half-extents in normalized device coordinates. The full NDC range
+        // is -1...1, so a full-width frame has a half-width of 1, not 0.5.
+        // Starting these at 1 and then dividing the frame by two again drew
+        // every photo at exactly half size in the centre of the canvas.
+        var halfWidth = CGFloat(1)
+        var halfHeight = CGFloat(1)
+        // NDC spans two units on each axis, while the view has a physical
+        // aspect ratio. A wide photo therefore fills x and is letterboxed on
+        // y; a tall photo fills y and is pillarboxed on x. This used to be
+        // reversed, which drew every landscape frame as a narrow vertical
+        // strip through the centre of the screen.
         if aspect > drawableAspect {
-            width = drawableAspect / aspect
+            halfHeight = drawableAspect / aspect
         } else {
-            height = aspect / drawableAspect
+            halfWidth = aspect / drawableAspect
         }
-        width *= zoom
-        height *= zoom
-        let frame = SIMD4<Float>(Float(pan.x - width / 2), Float(pan.x + width / 2),
-                                 Float(pan.y - height / 2), Float(pan.y + height / 2))
+        halfWidth *= zoom
+        halfHeight *= zoom
+        // Keep an edge of the photograph on every side while zoomed. Without
+        // this, a drag can move the whole frame off-screen and leave only the
+        // black canvas, with no way to tell whether the photo is still there.
+        let maxPanX = max(0, halfWidth - 1)
+        let maxPanY = max(0, halfHeight - 1)
+        let panX = min(max(pan.x, -maxPanX), maxPanX)
+        let panY = min(max(pan.y, -maxPanY), maxPanY)
+        let frame = SIMD4<Float>(Float(panX - halfWidth), Float(panX + halfWidth),
+                                 Float(panY - halfHeight), Float(panY + halfHeight))
+#if DEBUG
+        if ProcessInfo.processInfo.environment["SPEKTRAFILM_CANVAS_LOG"] == "1" {
+            NSLog("SpektraLab canvas frame=%@ sourceAspect=%.4f drawableAspect=%.4f",
+                  NSCoder.string(for: CGRect(x: CGFloat(frame.x), y: CGFloat(frame.z),
+                                             width: CGFloat(frame.y - frame.x),
+                                             height: CGFloat(frame.w - frame.z))),
+                  aspect, drawableAspect)
+        }
+#endif
         withUnsafeBytes(of: frame) { bytes in
-            transformBuffer.contents().advanced(by: Self.frameBufferOffset)
-                .copyMemory(from: bytes.baseAddress!, byteCount: bytes.count)
+            frameBuffer.contents().copyMemory(from: bytes.baseAddress!, byteCount: bytes.count)
         }
     }
 
@@ -186,6 +212,32 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
+#if DEBUG
+        if ProcessInfo.processInfo.environment["SPEKTRAFILM_CANVAS_LOG"] == "1" {
+            NSLog("SpektraLab canvas draw bounds=%@ drawable=%@ sourceAspect=%.4f drawableAspect=%.4f zoom=%.3f pan=%.3f,%.3f",
+                  NSCoder.string(for: view.bounds),
+                  NSCoder.string(for: view.drawableSize),
+                  sourceAspect ?? -1,
+                  drawableAspect,
+                  zoom, pan.x, pan.y)
+            NSLog("SpektraLab canvas layer bounds=%@ scale=%.3f super=%@ contentsRect=%@",
+                  NSCoder.string(for: view.layer.bounds),
+                  view.layer.contentsScale,
+                  view.superview.map { NSCoder.string(for: $0.bounds) } ?? "nil",
+                  NSCoder.string(for: view.layer.contentsRect))
+            if let root = view.window?.rootViewController?.view {
+                var found: [String] = []
+                func visit(_ v: UIView, _ depth: Int) {
+                    if let metal = v as? MTKView {
+                        found.append("d\(depth):\(NSCoder.string(for: metal.frame)) drawable=\(NSCoder.string(for: metal.drawableSize))")
+                    }
+                    for child in v.subviews { visit(child, depth + 1) }
+                }
+                visit(root, 0)
+                NSLog("SpektraLab canvas MTKViews=%@", found.joined(separator: " | "))
+            }
+        }
+#endif
         if view.drawableSize.height > 0 {
             let aspect = view.drawableSize.width / view.drawableSize.height
             if abs(aspect - drawableAspect) > 0.001 {
@@ -204,7 +256,9 @@ final class CanvasRenderer: NSObject, MTKViewDelegate {
         encoder.setFragmentTexture(texture, index: 0)
         if let transformBuffer {
             encoder.setFragmentBuffer(transformBuffer, offset: 0, index: 0)
-            encoder.setFragmentBuffer(transformBuffer, offset: Self.frameBufferOffset, index: 1)
+        }
+        if let frameBuffer {
+            encoder.setFragmentBuffer(frameBuffer, offset: 0, index: 1)
         }
         // A full-screen triangle: three vertices, no vertex buffer, no index
         // buffer. The vertex shader positions them from `vertex_id`.

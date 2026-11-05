@@ -60,12 +60,60 @@ final class ViewModel: ObservableObject {
     @Published var filmStock: String = StockCatalog.defaultFilm
     @Published var printStock: String = StockCatalog.defaultPaper
 
+    /// The film's physical edge. These are engine parameters, not a drawn
+    /// border: the rebate, holes and edge print are developed on the negative.
+    @Published private(set) var filmBorderEnabled = false
+    @Published private(set) var overscanFormat = FilmGateCatalog.automaticID
+
+    /// The camera's date back, printed through the film base.
+    @Published private(set) var dateBackEnabled = false
+    @Published private(set) var dateBackStyle: DateBackStyle = .lcd
+    @Published private(set) var dateBackPlacement: DateBackPlacement = .frame
+    @Published private(set) var dateBackCorner: DateBackCorner = .br
+    @Published private(set) var dateStampDate = Date()
+    @Published private(set) var shootingDataText = "1/125  F2.8  ISO 400  50mm"
+
     /// The catalogue, read at launch.
     @Published private(set) var catalog = StockCatalog(films: [], papers: [], slides: [])
 
     /// The stocks, in the order the scrolling strip shows them.
     var films: [Stock] { catalog.films + catalog.slides }
     var papers: [Stock] { catalog.papers }
+
+    var currentFilmName: String {
+        films.first { $0.id == filmStock }?.name ?? filmStock
+    }
+
+    var currentPaperName: String {
+        papers.first { $0.id == printStock }?.name ?? printStock
+    }
+
+    var selectedGate: FilmGate {
+        FilmGateCatalog.resolve(selection: overscanFormat, imageAspect: naturalAspect)
+    }
+
+    var gateDisplayName: String {
+        overscanFormat == FilmGateCatalog.automaticID
+            ? "自动 · \(selectedGate.title)"
+            : selectedGate.title
+    }
+
+    var dateBackAvailable: Bool { selectedGate.supportsDateBack }
+
+    var dateStampText: String {
+        let parts = Calendar(identifier: .gregorian).dateComponents(
+            [.year, .month, .day], from: dateStampDate)
+        return String(format: "'%02d %02d %02d",
+                      (parts.year ?? 2000) % 100,
+                      parts.month ?? 1,
+                      parts.day ?? 1)
+    }
+
+    /// A rebate date needs the film edge around the gate. Without it the
+    /// engine prints the date in the picture instead.
+    var effectiveDateBackPlacement: DateBackPlacement {
+        filmBorderEnabled ? dateBackPlacement : .frame
+    }
 
     /// Enough state to diagnose an engine failure without a debugger.
     var diagnostics: String {
@@ -88,6 +136,8 @@ final class ViewModel: ObservableObject {
 
     /// The decoded frame in the engine's input space.
     private var frame: DecodedFrame?
+    /// The photograph's own long/short ratio, before a film gate crops it.
+    private var naturalAspect: CGFloat = 3.0 / 2.0
 
     // MARK: - the engine
 
@@ -226,8 +276,48 @@ final class ViewModel: ObservableObject {
         let decoded = try ImageDecoder.decode(data: data,
                                               maxLongEdge: ImageDecoder.previewLongEdge,
                                               typeHint: typeHint)
-        try await loadFrame(decoded)
+        naturalAspect = CGFloat(decoded.width) / CGFloat(max(decoded.height, 1))
+        let framed = filmBorderEnabled
+            ? decoded.centerCropped(toAspect: selectedGate.aspect)
+            : decoded
+        try await loadFrame(framed)
         statusText = "已载入 \(decoded.width)×\(decoded.height) · \(String(format: "%.1f", decoded.megapixels)) MP"
+    }
+
+    /// Every path that opens a session uses the same complete delta. The
+    /// stocks are not enough: the film edge and date back are exposure on the
+    /// negative, so leaving them out here would make the preview and export
+    /// disagree with the controls.
+    private func currentEngineDelta() -> [String: ParamValue] {
+        var delta = ParamDefaults.delta(film: filmStock, paper: printStock)
+        for (key, value) in params { delta[key] = .number(value) }
+
+        let gate = selectedGate
+        delta["overscan_active"] = .bool(filmBorderEnabled)
+        delta["overscan_format"] = .string(gate.id)
+        delta["overscan_mode"] = .string("strip")
+        delta["overscan_gate"] = .string("auto")
+        delta["overscan_holes"] = .string("white")
+        delta["overscan_carrier"] = .string("none")
+        delta["overscan_edge_text"] = .string(currentFilmName.uppercased())
+        delta["overscan_frame_number"] = .number(12)
+        delta["overscan_camera_seed"] = .number(7)
+        delta["overscan_frame_seed"] = .number(11)
+        delta["overscan_fog"] = .number(1)
+        delta["overscan_leaks"] = .number(0)
+
+        let dateActive = dateBackEnabled && gate.supportsDateBack
+        delta["date_imprint_active"] = .bool(dateActive)
+        delta["date_imprint_text"] = .string(dateStampText)
+        delta["date_imprint_data_text"] = .string(shootingDataText)
+        delta["date_imprint_placement"] = .string(effectiveDateBackPlacement.rawValue)
+        delta["date_imprint_style"] = .string(dateBackStyle.rawValue)
+        delta["date_imprint_corner"] = .string(dateBackCorner.rawValue)
+        delta["date_imprint_ev"] = .number(3.5)
+        delta["date_imprint_size"] = .number(1)
+        delta["date_imprint_inset_x"] = .number(3)
+        delta["date_imprint_inset_y"] = .number(2.4)
+        return delta
     }
 
     /// Load an already-decoded frame: open a session and render the first
@@ -239,8 +329,7 @@ final class ViewModel: ObservableObject {
 
         // Open with the current stocks and parameters, so the first preview
         // already shows what the user chose.
-        var delta = ParamDefaults.delta(film: filmStock, paper: printStock)
-        for (key, value) in params { delta[key] = .number(value) }
+        let openDelta = currentEngineDelta()
 
         // The pointer has to stay alive across the `open` call: the engine
         // borrows the pixels for the duration of that call and copies what it
@@ -248,14 +337,16 @@ final class ViewModel: ObservableObject {
         // Taking the address inside a closure and using it outside would
         // leave it dangling -- which reads as a frame of noise rather than
         // as a crash, and is much harder to find.
-        let reply: OpenReply = try decoded.pixels.withUnsafeBufferPointer { buffer in
-            guard let base = buffer.baseAddress else {
-                throw EngineError.failed(status: -1, message: "解码结果为空")
+        let reply = try await engine.perform {
+            try decoded.pixels.withUnsafeBufferPointer { buffer in
+                guard let base = buffer.baseAddress else {
+                    throw EngineError.failed(status: -1, message: "解码结果为空")
+                }
+                return try engine.open(pixels: EnginePixels(
+                    data: base,
+                    width: decoded.width,
+                    height: decoded.height), params: openDelta)
             }
-            return try engine.open(pixels: EnginePixels(
-                data: base,
-                width: decoded.width,
-                height: decoded.height), params: delta)
         }
 
         if let meta = reply.meta, let w = meta.width, let h = meta.height {
@@ -265,7 +356,7 @@ final class ViewModel: ObservableObject {
         // The solve must happen before the first render, or the print uses
         // default exposure and the highlights blow out — which looks like a
         // rendering bug and is not one.
-        try engine.solve(target: "both")
+        try await engine.perform { try engine.solve(target: "both") }
 
         await renderNow()
     }
@@ -284,6 +375,106 @@ final class ViewModel: ObservableObject {
         params[key] = value
         paramsDirty = true
         scheduleRender()
+    }
+
+    /// Turn the physical film edge on or off. The picture has to be re-opened
+    /// with the gate's aspect ratio: the engine refuses a crop that is not the
+    /// selected format's shape, and stretching an edge around the old frame
+    /// would not be the same negative.
+    func setFilmBorderEnabled(_ enabled: Bool) {
+        guard filmBorderEnabled != enabled else { return }
+        filmBorderEnabled = enabled
+        if !enabled && dateBackPlacement == .rebate {
+            dateBackPlacement = .frame
+        }
+        reloadPreviewForFilmEffect()
+    }
+
+    /// Pick an explicit gate, or automatic matching against the photograph.
+    func setOverscanFormat(_ id: String) {
+        guard id == FilmGateCatalog.automaticID || FilmGateCatalog.gate(id: id) != nil else { return }
+        overscanFormat = id
+        if !selectedGate.supportsDateBack {
+            dateBackEnabled = false
+            dateBackPlacement = .frame
+        }
+        if filmBorderEnabled { reloadPreviewForFilmEffect() }
+    }
+
+    func setDateBackEnabled(_ enabled: Bool) {
+        guard enabled == false || selectedGate.supportsDateBack else { return }
+        dateBackEnabled = enabled
+        if enabled && !filmBorderEnabled { dateBackPlacement = .frame }
+        scheduleEffectRender()
+    }
+
+    func setDateBackStyle(_ style: DateBackStyle) {
+        dateBackStyle = style
+        scheduleEffectRender()
+    }
+
+    func setDateBackPlacement(_ placement: DateBackPlacement) {
+        dateBackPlacement = (placement == .rebate && filmBorderEnabled) ? .rebate : .frame
+        scheduleEffectRender()
+    }
+
+    func setDateBackCorner(_ corner: DateBackCorner) {
+        dateBackCorner = corner
+        scheduleEffectRender()
+    }
+
+    func setDateStampDate(_ date: Date) {
+        guard date != dateStampDate else { return }
+        dateStampDate = date
+        scheduleEffectRender()
+    }
+
+    func setShootingDataText(_ text: String) {
+        guard text != shootingDataText else { return }
+        shootingDataText = text
+        scheduleEffectRender()
+    }
+
+    private func scheduleEffectRender() {
+        guard frame != nil else { return }
+        paramsDirty = true
+        scheduleRender()
+    }
+
+    /// A gate change has to reload the preview because the crop is applied
+    /// before the engine sees the frame. A toggle-off reloads the full frame,
+    /// restoring the part the rebate had cropped away.
+    private func reloadPreviewForFilmEffect() {
+        guard let data = originalData else {
+            scheduleEffectRender()
+            return
+        }
+        let hint = originalTypeHint
+        state = .importing
+        statusText = filmBorderEnabled ? "正在裁切到 \(gateDisplayName)…" : "正在恢复完整画面…"
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let decoded = try await Task.detached(priority: .userInitiated) {
+                    try ImageDecoder.decode(data: data,
+                                            maxLongEdge: ImageDecoder.previewLongEdge,
+                                            typeHint: hint)
+                }.value
+                self.naturalAspect = CGFloat(decoded.width) / CGFloat(max(decoded.height, 1))
+                let gate = self.selectedGate
+                if !gate.supportsDateBack {
+                    self.dateBackEnabled = false
+                    self.dateBackPlacement = .frame
+                }
+                let framed = self.filmBorderEnabled
+                    ? decoded.centerCropped(toAspect: gate.aspect)
+                    : decoded
+                try await self.loadFrame(framed)
+            } catch {
+                self.state = .failed(error.localizedDescription)
+                self.statusText = "片边载入失败"
+            }
+        }
     }
 
     /// The film changed: reopen, because the stock is a session-level choice.
@@ -306,25 +497,30 @@ final class ViewModel: ObservableObject {
     /// Reopen the session with the current stocks and parameters.
     private func reopenAndRender() {
         guard let frame, let engine else { return }
-        var delta = ParamDefaults.delta(film: filmStock, paper: printStock)
-        for (key, value) in params { delta[key] = .number(value) }
-        do {
-            // The pointer has to outlive the call: the engine borrows the
-            // pixels for the duration of `open` and copies what it keeps.
-            try frame.pixels.withUnsafeBufferPointer { buffer in
-                guard let base = buffer.baseAddress else {
-                    throw EngineError.failed(status: -1, message: "解码结果为空")
+        let openDelta = currentEngineDelta()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await engine.perform {
+                    // The pointer has to outlive the call: the engine borrows
+                    // the pixels for the duration of `open` and copies what
+                    // it keeps.
+                    try frame.pixels.withUnsafeBufferPointer { buffer in
+                        guard let base = buffer.baseAddress else {
+                            throw EngineError.failed(status: -1, message: "解码结果为空")
+                        }
+                        _ = try engine.open(pixels: EnginePixels(
+                            data: base,
+                            width: frame.width,
+                            height: frame.height), params: openDelta)
+                    }
+                    try engine.solve(target: "both")
                 }
-                _ = try engine.open(pixels: EnginePixels(
-                    data: base,
-                    width: frame.width,
-                    height: frame.height), params: delta)
+                self.paramsDirty = false
+                self.scheduleRender()
+            } catch {
+                self.state = .failed(error.localizedDescription)
             }
-            try engine.solve(target: "both")
-            paramsDirty = false
-            scheduleRender()
-        } catch {
-            state = .failed(error.localizedDescription)
         }
     }
 
@@ -354,12 +550,14 @@ final class ViewModel: ObservableObject {
         guard let engine, let renderer else { return }
         guard frame != nil else { return }
 
+        // This render is consuming the request that is currently pending.
+        // A change made while it is awaiting the engine sets the flag again.
+        needsRender = false
         renderInFlight = true
         defer {
             renderInFlight = false
             // A request that arrived while this render was running runs now.
             if needsRender {
-                needsRender = false
                 scheduleRender()
             }
         }
@@ -367,19 +565,22 @@ final class ViewModel: ObservableObject {
         state = .rendering
 
         do {
-            if paramsDirty {
-                var delta: [String: ParamValue] = [:]
-                for (key, value) in params { delta[key] = .number(value) }
-                _ = try engine.setParams(delta)
-                paramsDirty = false
-                // The exposure has to be recomputed when the compensation
-                // changed, or the print keeps the old EV.
-                try engine.solve(target: "both")
-            }
+            let dirty = paramsDirty
+            let changed = currentEngineDelta()
+            let result = try await engine.perform {
+                if dirty {
+                    _ = try engine.setParams(changed)
+                    // The exposure has to be recomputed when the
+                    // compensation changed, or the print keeps the old EV.
+                    try engine.solve(target: "both")
+                }
 
-            // `live` is the interactive tier: the engine renders at the live
-            // long edge (2048 px), which is what a phone screen can show.
-            let result = try engine.render(tier: "live", reprint: true)
+                // `live` is the interactive tier: the engine renders at the
+                // live long edge (2048 px), which is what a phone screen can
+                // show.
+                return try engine.render(tier: "live", reprint: true)
+            }
+            if dirty { paramsDirty = false }
             renderer.setTexture(result.texture)
             renderedTexture = result.texture
             renderIdentity = result.progressID.isEmpty
@@ -413,19 +614,24 @@ final class ViewModel: ObservableObject {
         statusText = "正在导出高质量 JPEG…"
 
         do {
-            // Keep the large decoded frame in a tight scope. The engine copies
-            // it during `open`; retaining it while reading the rendered GPU
-            // texture back was enough to jetsam a phone on 24–26 MP ARW files.
-            let result: RenderResult
-            do {
-                let full = try ImageDecoder.decode(data: originalData,
-                                                   maxLongEdge: ImageDecoder.exportLongEdge,
-                                                   typeHint: originalTypeHint)
+            let data = originalData
+            let hint = originalTypeHint
+            let cropAspect = filmBorderEnabled ? selectedGate.aspect : nil
+            // Decoding a RAW container is CPU-heavy. Do it off the main actor
+            // so the export sheet keeps moving and the UI never freezes.
+            let full = try await Task.detached(priority: .userInitiated) {
+                try ImageDecoder.decode(data: data,
+                                        maxLongEdge: ImageDecoder.exportLongEdge,
+                                        typeHint: hint,
+                                        aspect: cropAspect)
+            }.value
 
-                // Reopen on the export frame with the same stocks and parameters.
-                var delta = ParamDefaults.delta(film: filmStock, paper: printStock)
-                delta["settings.striped"] = .bool(true)
-                for (key, value) in params { delta[key] = .number(value) }
+            let exportDelta = currentEngineDelta()
+
+            // Open, solve and render are one unit on the engine's serial
+            // queue. `full` stays alive only until `open` copies it; the
+            // exported image then owns the engine's 16-bit rows directly.
+            let bitmap = try await engine.perform {
                 try full.pixels.withUnsafeBufferPointer { buffer in
                     guard let base = buffer.baseAddress else {
                         throw EngineError.failed(status: -1, message: "解码结果为空")
@@ -433,23 +639,22 @@ final class ViewModel: ObservableObject {
                     _ = try engine.open(pixels: EnginePixels(
                         data: base,
                         width: full.width,
-                        height: full.height), params: delta)
+                        height: full.height), params: exportDelta)
                 }
                 try engine.solve(target: "both")
-                result = try engine.render(tier: "full", reprint: false)
-            }
-            guard let texture = result.texture else {
-                throw EngineError.failed(status: -1, message: "引擎没有返回图像")
+                return try engine.renderBitmap(tier: "full", reprint: false)
             }
 
-            // Write the JPEG directly to a temporary file. Building a UIImage
-            // and then calling jpegData() creates another full-size copy and
-            // was enough to terminate the app under memory pressure.
-            let jpegURL = try await Self.writeJPEG(from: texture,
-                                                    rowStridePx: result.rowStridePx)
+            // Encode on a background task as well: JPEG compression is the
+            // second-long part after a 24 MP render and does not need the main
+            // actor. No UIImage and no full-size JPEG Data are created.
+            let cgImage = bitmap.cgImage
+            let jpegURL = try await Task.detached(priority: .userInitiated) {
+                try Self.writeJPEG(from: cgImage)
+            }.value
             try await PhotoLibrary.saveJPEG(at: jpegURL)
 
-            statusText = String(format: "已导出 %d×%d 到相册", result.width, result.height)
+            statusText = String(format: "已导出 %d×%d 到相册", bitmap.width, bitmap.height)
             state = .ready
         } catch {
             state = .failed(error.localizedDescription)
@@ -457,74 +662,14 @@ final class ViewModel: ObservableObject {
         }
     }
 
-    /// The engine's texture → a JPEG file, in sRGB.
+    /// Write the engine's 16-bit sRGB image as a JPEG.
     ///
-    /// The texture is sRGB-encoded `RGBA16Unorm`, matching the desktop
-    /// preview host. The file is also an sRGB JPEG, so this step only reduces
-    /// 16-bit code values to 8-bit without another colour conversion.
-    ///
-    /// The row offset is `y * rowStridePx * 4` **uint16s** in the *engine's*
-    /// own linear memory — but a private texture has no CPU-visible memory, so
-    /// we never read it directly. Instead we blit into a shared buffer: the
-    /// blit packs `width` pixels per row, so the buffer is addressed by
-    /// `y * width + x` (the engine's `rowStridePx` pitch is irrelevant here).
-    @MainActor
-    private static func writeJPEG(from texture: MTLTexture, rowStridePx: Int) async throws -> URL {
-        let width = texture.width
-        let height = texture.height
-        guard width > 0, height > 0,
-              texture.pixelFormat == .rgba16Unorm else {
-            throw ExportError.encodingFailed
-        }
-
-        // Read only a small number of rows at a time. The engine's result is a
-        // shared, buffer-backed texture, so getBytes() copies it directly and
-        // avoids a second full-size Metal buffer and a command-buffer wait.
-        let tileRows = 128
-        let sourceBytesPerRow = width * 4 * MemoryLayout<UInt16>.size
-        var source = [UInt16](repeating: 0, count: width * tileRows * 4)
-
-        // 1) Gamma-encoded sRGB RGBA16Unorm → gamma-encoded sRGB RGBA8.
-        // Keep one 8-bit RGBA image because CGImageDestination accepts a
-        // CGImage, but do not also create a UIImage or an in-memory JPEG Data.
-        var out = Data(count: width * height * 4)
-        out.withUnsafeMutableBytes { dstRaw in
-            guard let dst = dstRaw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
-            for y0 in stride(from: 0, to: height, by: tileRows) {
-                let rows = min(tileRows, height - y0)
-                source.withUnsafeMutableBytes { sourceRaw in
-                    texture.getBytes(sourceRaw.baseAddress!,
-                                     bytesPerRow: sourceBytesPerRow,
-                                     from: MTLRegionMake2D(0, y0, width, rows),
-                                     mipmapLevel: 0)
-                }
-                for row in 0..<rows {
-                    for x in 0..<width {
-                        let si = (row * width + x) * 4
-                        let di = ((y0 + row) * width + x) * 4
-                        dst[di + 0] = UInt8((UInt32(source[si + 0]) + 128) / 257)
-                        dst[di + 1] = UInt8((UInt32(source[si + 1]) + 128) / 257)
-                        dst[di + 2] = UInt8((UInt32(source[si + 2]) + 128) / 257)
-                        dst[di + 3] = 255
-                    }
-                }
-            }
-        }
-
-        // 2) An 8-bit sRGB CGImage (already transfer-encoded; colour space sRGB).
-        guard let provider = CGDataProvider(data: out as CFData) else {
-            throw EngineError.failed(status: -1, message: "无法构造数据提供器")
-        }
-        guard let cgImage = CGImage(width: width, height: height,
-                                    bitsPerComponent: 8, bitsPerPixel: 32,
-                                    bytesPerRow: width * 4,
-                                    space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                    bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
-                                    provider: provider, decode: nil,
-                                    shouldInterpolate: false,
-                                    intent: .defaultIntent) else {
-            throw EngineError.failed(status: -1, message: "无法构造图像")
-        }
+    /// `cgImage` already owns the engine rows through its data provider, so
+    /// ImageIO can encode straight from those pixels. The previous path read
+    /// the Metal texture into a CPU array and converted every pixel to RGBA8;
+    /// that array, plus the 8-bit Data buffer, was roughly 500 MB at 24 MP and
+    /// was the cause of the export-time jetsam kills.
+    private nonisolated static func writeJPEG(from cgImage: CGImage) throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("SpektraLab-\(UUID().uuidString).jpg")
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL,

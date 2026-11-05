@@ -48,6 +48,10 @@ WANTED = (
     "engine/third_party/metal-cpp",
     "engine/resources",
     "engine/resources_product",
+    # The iOS build uses this to fetch the pinned LibRaw tree for the RAW
+    # fallback. It lives at the engine root, so the directory prefixes above
+    # do not pick it up.
+    "engine/setup-libraw.sh",
 )
 
 # The upstream's `engine/third_party` also has `stb`, which the app does not
@@ -62,6 +66,7 @@ REQUIRED = (
     "engine/src/gpu/metal_gpu.cpp",
     "engine/src/pipeline/engine.cpp",
     "engine/src/shaders/nodes.metal",
+    "engine/setup-libraw.sh",
 )
 
 

@@ -134,7 +134,9 @@ enum ParamCatalog {
 enum ParamDefaults {
     static func delta(film: String, paper: String) -> [String: ParamValue] {
         var delta: [String: ParamValue] = [
-            // Match the desktop preview host's colour contract.
+            // Match the macOS preview host and its Core Image conversion:
+            // linear ProPhoto in, sRGB out. The engine performs no implicit
+            // colour conversion, and the app does not invent one.
             "input_color_space": .string("ProPhoto RGB"),
             "input_cctf_decoding": .bool(false),
             "output_color_space": .string("sRGB"),

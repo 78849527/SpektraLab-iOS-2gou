@@ -1,315 +1,177 @@
 # SpektraLab for iOS
 
-SpektraLab 的 iPhone 社区移植版。它使用 C++20 与 Metal 运行真实的胶片/相纸物理模拟：照片会经过胶片曝光、染料层、颗粒、光晕、放大和相纸成像流程，而不是简单套用一张 LUT。
+SpektraLab 的 iPhone 社区移植版。它在设备上用 C++20 与 Metal 运行胶片和相纸的物理模拟：胶片曝光、染料层、颗粒、光晕、放大与相纸成像，而不是给照片套一张 LUT。
 
-> 本项目不是 SpektraLab 官方 iOS 客户端。核心引擎来自 [JamesQiu2005/SpektraLab](https://github.com/JamesQiu2005/SpektraLab)，本仓库维护 iOS 界面、RAW/JPEG 导入、Metal 适配、照片导出和自动构建。
+> 这不是 SpektraLab 官方 iOS 客户端。核心引擎来自 [JamesQiu2005/SpektraLab](https://github.com/JamesQiu2005/SpektraLab)；本仓库维护 iOS 界面、RAW/JPEG 导入、Metal 适配、全分辨率导出与自动构建。
 
-## 当前版本
+## 下载与安装
+
+前往 **[Latest Release](https://github.com/Minerchu/SpektraLab-iOS/releases/latest)** 下载最新 IPA。Release 每次由 `main` 的最新成功构建替换，资产文件名带有提交号，避免 CDN 返回旧包。
+
+当前版本：**1.1.0**。本版重做了预览与片库布局，并加入真实片边、日期后背与 120 拍摄数据。
+
+推荐下载文件名以 **`-unsigned.ipa`** 结尾的版本：
+
+| 工具 | 使用方式 |
+|---|---|
+| SideStore / AltStore | 选择未签名 IPA，用自己的 Apple ID 重签并安装 |
+| Sideloadly | 选择未签名 IPA；若 Release 同时提供 ad-hoc 版也可使用 |
+| Xcode | 克隆源码，在 Signing 中选择自己的 Personal Team 后运行 |
+
+Release 中的 IPA 不包含你的个人开发证书，不能直接安装。免费 Apple ID 的签名通常 7 天后过期，需要续签。最低系统版本为 **iOS 27.0**。
+
+## 功能
 
 | 项目 | 状态 |
 |---|---|
-| 最低系统 | iOS 27.0 |
-| 开发环境 | Xcode 27.2、Swift 6、C++20、Metal |
-| 界面 | 原生 Liquid Glass，底部横向胶片/相纸选择条 |
-| 导入 | JPEG、Apple RAW/DNG，以及系统支持的 Sony ARW |
-| 导出 | 原始像素分辨率的 8-bit sRGB JPEG（当前解码上限 6400 万像素） |
-| 预览 | 保持原始宽高比，支持缩放、拖动和双击复位 |
-| 配置 | 25 款拍摄胶片/正片、9 款相纸及电影打印片 |
+| 系统与工具链 | iOS 27.0+、Xcode 27.2、Swift 6、C++20、Metal |
+| 界面 | 原生 Liquid Glass；动态片名标题、沉浸预览、紧凑单行片库 |
+| 导入 | JPEG、DNG/Apple ProRAW、Sony ARW、Canon CR3、Nikon NEF 等相机 RAW |
+| 导出 | 原始像素分辨率的 sRGB JPEG；16-bit 引擎结果直接编码；解码上限 6400 万像素 |
+| 预览 | 自适应宽高比，支持缩放、拖动、双击复位与单指点按沉浸模式 |
+| 片边 | 135 齿孔/DX、120 645–6×9、半格与全景片幅；片基、片边字和格号由引擎显影 |
+| 日期后背 | LCD 七段/点阵日期；120 片边拍摄数据；曝光进入负片而非 UI 叠加 |
+| 配置 | 25 款胶片/正片、9 款相纸与电影打印片 |
 
-目前仍处于测试阶段。不同 iPhone 和 iOS 版本支持的相机 RAW 型号可能不同，重要照片请保留原文件。
+引擎资源随 IPA 内置，首次启动只在本地解包，不依赖网络。仍处于测试阶段；不同 iPhone 和 iOS 版本支持的 RAW 型号可能不同，重要照片请保留原文件。
 
-## 胶片与相纸实测预览
+## 实测预览
 
-以下图片统一使用 Nikon Z6 II 的 `marinasheyanova@marina_sheyanova_msh_8485_174539603751.nef`，由正式 iOS `ImageDecoder` 直接解码为 float32 线性 ProPhoto，再使用与 Mac 1.3.5 对齐的默认参数通过项目自身的 C++/Metal 引擎生成。每张联系表固定一种相纸或电影打印片，并列出全部 21 款拍摄负片；这些图片反映当前 iOS 版本的真实输出。
+以下联系表由正式 iOS `ImageDecoder` 解码为 float32 线性 ProPhoto，再通过项目自身的 C++/Metal 引擎生成。输出与 App 一样使用 sRGB，色彩空间转换由 Core Image 完成。
 
-<details>
-<summary>Fujifilm Crystal Archive Type II</summary>
+**Nikon Z6 II · Fujifilm Crystal Archive Type II**
 
-![Fujifilm Crystal Archive Type II combinations](docs/stock-previews/fujifilm_crystal_archive_typeii.jpg)
-</details>
+![Nikon NEF with Fujifilm Crystal Archive Type II](docs/stock-previews/fujifilm_crystal_archive_typeii.jpg)
 
-<details>
-<summary>Ilford Multigrade IV RC</summary>
+**Olympus ORF · Kodak Vision 2383**
 
-![Ilford Multigrade IV RC combinations](docs/stock-previews/ilford_multigrade_iv_rc.jpg)
-</details>
+![Olympus ORF with Kodak Vision 2383](docs/stock-previews-sunlight/kodak_2383.jpg)
 
-<details>
-<summary>Kodak Ektacolor Edge</summary>
+**Canon CR3 · 反转片**
 
-![Kodak Ektacolor Edge combinations](docs/stock-previews/kodak_ektacolor_edge.jpg)
-</details>
+![Canon CR3 reversal films](docs/stock-previews-sky-shadow/reversal-films.jpg)
 
-<details>
-<summary>Kodak Vision 2383（电影打印片）</summary>
+## 界面与片边
 
-![Kodak Vision 2383 combinations](docs/stock-previews/kodak_2383.jpg)
-</details>
+顶部直接显示当前胶片与相纸，底部只留一行片库和三分类标签。点按照片进入无干扰预览，再点一次恢复控件。
 
-<details>
-<summary>Kodak Vision Premier 2393（电影打印片）</summary>
+![紧凑片库与动态片名](docs/ui/main-redesign.jpg)
 
-![Kodak Vision Premier 2393 combinations](docs/stock-previews/kodak_2393.jpg)
-</details>
+开启“片边”后，画面会被居中裁切到所选真实片幅，再由引擎在负片上生成片基、齿孔、片边字与格号；全分辨率导出使用同一裁切。
 
-<details>
-<summary>Kodak Endura Premier</summary>
+![35 mm 齿孔与片边字](docs/ui/film-border-135.jpg)
 
-![Kodak Endura Premier combinations](docs/stock-previews/kodak_endura_premier.jpg)
-</details>
+日期后背和 120 拍摄数据同样经过胶片曝光、显影、颗粒与光晕，不是后期贴字。
 
-<details>
-<summary>Kodak Portra Endura</summary>
+![120 片边、日期和拍摄数据](docs/ui/film-border-120-date.jpg)
 
-![Kodak Portra Endura combinations](docs/stock-previews/kodak_portra_endura.jpg)
-</details>
+![片边与日期后背设置](docs/ui/film-effects.jpg)
 
-<details>
-<summary>Kodak Supra Endura</summary>
+## 使用
 
-![Kodak Supra Endura combinations](docs/stock-previews/kodak_supra_endura.jpg)
-</details>
+1. 启动 App，等待内置引擎资源在本地解包。
+2. 点击顶部照片按钮，从相册或“文件”导入 JPEG / RAW。Sony ARW 等相机 RAW 建议从“文件”导入原始文件，避免系统只提供相册预览图。
+3. 在底部选择胶片；切换到“相纸”可选择相纸或电影打印片。顶部标题会同步显示当前胶片与相纸。
+4. 在“调整”中修改曝光、颗粒、光晕等参数；同一页的“片边 / 日期”入口可以打开物理片边、日期后背与拍摄数据。
+5. 双指缩放、拖动查看细节；双击照片在适合屏幕和沉浸模式间切换，单指点按也可以隐藏或恢复控件。
+6. 点击导出，App 会重新读取原图、按原始分辨率完整渲染，并写入系统相册；开启片边时按同一片幅裁切。
 
-<details>
-<summary>Kodak Ultra Endura</summary>
-
-![Kodak Ultra Endura combinations](docs/stock-previews/kodak_ultra_endura.jpg)
-</details>
-
-反转片没有相纸打印阶段，因此单独列出：
-
-![Reversal film previews](docs/stock-previews/reversal-films.jpg)
-
-### 阳光场景：Olympus ORF
-
-以下联系表使用 `P9020196.ORF`，用于比较蓝天、直射阳光、石材高光和建筑阴影下的胶片表现。解码与渲染流程和上面的 Nikon 样片完全相同。
-
-<details>
-<summary>Fujifilm Crystal Archive Type II</summary>
-
-![Fujifilm Crystal Archive Type II sunlight combinations](docs/stock-previews-sunlight/fujifilm_crystal_archive_typeii.jpg)
-</details>
-
-<details>
-<summary>Ilford Multigrade IV RC</summary>
-
-![Ilford Multigrade IV RC sunlight combinations](docs/stock-previews-sunlight/ilford_multigrade_iv_rc.jpg)
-</details>
-
-<details>
-<summary>Kodak Ektacolor Edge</summary>
-
-![Kodak Ektacolor Edge sunlight combinations](docs/stock-previews-sunlight/kodak_ektacolor_edge.jpg)
-</details>
-
-<details>
-<summary>Kodak Vision 2383（电影打印片）</summary>
-
-![Kodak Vision 2383 sunlight combinations](docs/stock-previews-sunlight/kodak_2383.jpg)
-</details>
-
-<details>
-<summary>Kodak Vision Premier 2393（电影打印片）</summary>
-
-![Kodak Vision Premier 2393 sunlight combinations](docs/stock-previews-sunlight/kodak_2393.jpg)
-</details>
-
-<details>
-<summary>Kodak Endura Premier</summary>
-
-![Kodak Endura Premier sunlight combinations](docs/stock-previews-sunlight/kodak_endura_premier.jpg)
-</details>
-
-<details>
-<summary>Kodak Portra Endura</summary>
-
-![Kodak Portra Endura sunlight combinations](docs/stock-previews-sunlight/kodak_portra_endura.jpg)
-</details>
-
-<details>
-<summary>Kodak Supra Endura</summary>
-
-![Kodak Supra Endura sunlight combinations](docs/stock-previews-sunlight/kodak_supra_endura.jpg)
-</details>
-
-<details>
-<summary>Kodak Ultra Endura</summary>
-
-![Kodak Ultra Endura sunlight combinations](docs/stock-previews-sunlight/kodak_ultra_endura.jpg)
-</details>
-
-反转片阳光场景：
-
-![Reversal film sunlight previews](docs/stock-previews-sunlight/reversal-films.jpg)
-
-### 蓝天与阴影平衡：Canon CR3
-
-以下联系表使用 Canon EOS R6 Mark III 的 `9738333703.cr3`，重点比较蓝天色相与饱和度、阳坡高光以及山体深阴影之间的平衡。解码与渲染参数和前两组保持一致。
-
-<details>
-<summary>Fujifilm Crystal Archive Type II</summary>
-
-![Fujifilm Crystal Archive Type II sky and shadow combinations](docs/stock-previews-sky-shadow/fujifilm_crystal_archive_typeii.jpg)
-</details>
-
-<details>
-<summary>Ilford Multigrade IV RC</summary>
-
-![Ilford Multigrade IV RC sky and shadow combinations](docs/stock-previews-sky-shadow/ilford_multigrade_iv_rc.jpg)
-</details>
-
-<details>
-<summary>Kodak Ektacolor Edge</summary>
-
-![Kodak Ektacolor Edge sky and shadow combinations](docs/stock-previews-sky-shadow/kodak_ektacolor_edge.jpg)
-</details>
-
-<details>
-<summary>Kodak Vision 2383（电影打印片）</summary>
-
-![Kodak Vision 2383 sky and shadow combinations](docs/stock-previews-sky-shadow/kodak_2383.jpg)
-</details>
-
-<details>
-<summary>Kodak Vision Premier 2393（电影打印片）</summary>
-
-![Kodak Vision Premier 2393 sky and shadow combinations](docs/stock-previews-sky-shadow/kodak_2393.jpg)
-</details>
-
-<details>
-<summary>Kodak Endura Premier</summary>
-
-![Kodak Endura Premier sky and shadow combinations](docs/stock-previews-sky-shadow/kodak_endura_premier.jpg)
-</details>
-
-<details>
-<summary>Kodak Portra Endura</summary>
-
-![Kodak Portra Endura sky and shadow combinations](docs/stock-previews-sky-shadow/kodak_portra_endura.jpg)
-</details>
-
-<details>
-<summary>Kodak Supra Endura</summary>
-
-![Kodak Supra Endura sky and shadow combinations](docs/stock-previews-sky-shadow/kodak_supra_endura.jpg)
-</details>
-
-<details>
-<summary>Kodak Ultra Endura</summary>
-
-![Kodak Ultra Endura sky and shadow combinations](docs/stock-previews-sky-shadow/kodak_ultra_endura.jpg)
-</details>
-
-反转片蓝天与阴影场景：
-
-![Reversal film sky and shadow previews](docs/stock-previews-sky-shadow/reversal-films.jpg)
-
-## 下载
-
-前往 **[Latest Release](https://github.com/Minerchu/SpektraLab-iOS/releases/latest)** 下载最新 IPA。文件名包含提交号，用于避免 GitHub CDN 返回旧版本。
-
-Release 中有两个文件：
-
-| 文件 | 用途 |
-|---|---|
-| `SpektraLab-<提交号>-unsigned.ipa` | SideStore、AltStore 等会自行重签的工具，推荐这类工具使用 |
-| `SpektraLab-<提交号>.ipa` | ad-hoc 封签版，供 Sideloadly、Xcode 或其他签名流程使用 |
-
-GitHub Release 中的 IPA 不带你的个人开发证书，不能直接双击安装，必须先用自己的 Apple ID 或开发证书重签。
-
-## 安装
-
-### SideStore / AltStore
-
-1. 下载 `SpektraLab-<提交号>-unsigned.ipa`。
-2. 在 SideStore 或 AltStore 中选择该文件。
-3. 使用自己的 Apple ID 完成重签和安装。
-4. 免费 Apple ID 的签名通常 7 天后过期，需要重新签名。
-
-### Sideloadly
-
-1. 下载普通的 `SpektraLab-<提交号>.ipa`。
-2. 连接 iPhone，在 Sideloadly 中选择 IPA。
-3. 使用自己的 Apple ID 签名并安装。
-
-### Xcode
-
-克隆仓库，在 Xcode 中登录 Apple ID，把 Signing 设置为自己的 Personal Team，然后连接 iPhone 运行。设备必须满足 iOS 27.0 最低版本。
-
-## 使用方法
-
-1. 引擎资源随安装包内置，首次启动自动在本地解包，无需联网下载。
-2. 点击顶部照片按钮，从系统相册导入 JPEG、Apple RAW 或 DNG。
-3. Sony ARW 建议使用“从文件导入 Sony ARW / RAW”，这样应用可以读取原始文件，而不是相册生成的预览图。
-4. 在底部横向滑动并选择胶片，再切换到“相纸”选择相纸。
-5. 在“调整”中修改曝光、颗粒、光晕等参数。
-6. 双指放大预览，放大后拖动查看细节；双击照片恢复适合屏幕。
-7. 点击右上角导出按钮，应用会重新渲染并以 JPEG 保存到系统相册。
-
-## 图片与颜色管线
+## 图像与色彩管线
 
 ### 导入
 
-- JPEG 通过 ImageIO 解码。
-- Apple RAW/DNG 和 Sony ARW 优先通过 Core Image 的 RAW 解码器读取。
-- RAW 使用 Apple 解码器的受支持默认处理；应用不会调用不同 iOS 实现中可能不存在的 RAW 属性 setter。
-- 解码结果转换为引擎需要的线性 ProPhoto RGB。
-- 预览长边限制为 2048 px，以降低手机内存和实时切换胶片时的负担。
+- JPEG 由 ImageIO/Core Image 解码，直接转换到引擎需要的线性 ProPhoto RGB。
+- 相机 RAW 优先交给 Core Image。App 会按文件扩展名选择真实 RAW UTI，因为 iOS 常把 ARW/NEF 报告成 `public.tiff`，直接使用系统返回值会丢失厂商配置。
+- Core Image 返回空图、内嵌缩略图或明显低分辨率结果时，回退到内置的 **LibRaw 0.22.2**。
+- LibRaw 回退策略与桌面版一致：相机白平衡、AHD、不自动提亮，输出线性 ProPhoto RGB。
+- 预览长边限制为 2048 px；导出时重新解码原始文件并使用原始像素分辨率。
 
-Sony ARW 是否可解码由 iOS/Core Image 对具体相机型号的支持决定。无法识别时应用会显示导入错误，不会把错误数据继续交给胶片引擎。
+### 色彩管理
 
-### 预览与导出
+- 引擎输入为**线性 ProPhoto RGB**，`input_cctf_decoding = false`。
+- 引擎输出为 **sRGB**，与 macOS preview host 保持一致。
+- 输入与输出的色彩空间转换全部交给 **Core Image**；App 不使用自建转换矩阵，也不手写 gamma 曲线。
+- 画布 `CAMetalLayer` 与导出 JPEG 都标记为 sRGB，不做二次转换。
 
-- 引擎输出固定为 sRGB，与桌面预览主机保持一致。
-- 画布按照片真实比例显示，不再把竖图或横图压进固定 2:3 框架。
-- 导出会重新读取原始文件并完整运行胶片流程。
-- 预览使用长边 2048 px；导出重新读取原图，使用原始像素分辨率并启用引擎分条处理。大图真机内存表现仍需验证。
-- Metal 纹理按行分块读取，JPEG 直接写入临时文件，避免同时生成多个全尺寸内存副本。
-- 无论导入 JPEG 还是 RAW，最终都保存为带 sRGB 描述的 JPEG。
+### 导出
 
-## 界面
+- 导出直接读取引擎的 16-bit `spk_result.rgba16`，通过 `CGDataProvider` 交给 ImageIO 编码。
+- 不再生成全尺寸 RGBA8 副本，避免 24–26 MP 导出时的内存峰值。
+- 已在 iOS 27.2 模拟器完成 6240×4168 Sony ARW 的全尺寸 `decode → render → JPEG` 验证；目标真机仍需逐项复测。
 
-- iOS 27 上使用系统原生 Liquid Glass。
-- 胶片和相纸采用底部横向选择条，切换时照片始终可见。
-- Mac 版已有封面的 11 款胶片显示真实封面，其余配置使用统一胶卷徽标和稳定颜色区分。
-- 顶部区域保持紧凑，为照片预览保留更多空间。
+### 片边与日期后背
+
+- 片边来自上游引擎的 overscan 实现：画面外是同一段负片上的片基、齿孔、DX 码、片边字、格号、边缘雾化和光晕，随后与画面一起显影。
+- 引擎只接受与片幅比例相差不超过 5% 的画面，因此开启片边时 App 会先按片幅做居中裁切；横竖构图都保留原图方向。预览在内存中裁切，全分辨率导出在解码阶段裁切，避免多复制一整张高像素图像。
+- 可选 135 全画幅、135 半格、120 / 645、6×6、6×7、6×8、6×9、XPan、6×12 与 6×17；“自动”会选择最接近照片长宽比的实测片幅。
+- 日期后背支持液晶七段和点阵字面。135 可放在画面内或帧间；120 默认印在片边留白。全景片幅不支持日期后背。
+- 拍摄数据在 120 印于片边、135 印于齿孔之间。日期和数据都以相机背光曝光进负片，并继承胶片颗粒与光晕。
 
 ## 本地构建
 
 ### 要求
 
-- macOS
-- Xcode 27.2 或更新版本
-- iOS 27 SDK
 - Apple silicon Mac
-- 如需安装到真机，需要在 Xcode 登录 Apple ID
+- macOS 与 Xcode 27.2 或更新版本
+- iOS 27 SDK
+- Python 3.10+
+- 安装到真机时，Xcode 已登录 Apple ID
 
-### 构建步骤
+### 获取源码与引擎
 
 ```bash
 git clone https://github.com/Minerchu/SpektraLab-iOS.git
 cd SpektraLab-iOS
 
-# 获取仓库固定版本的上游引擎
-git clone https://github.com/JamesQiu2005/SpektraLab.git engine
-cd engine
-git checkout 02d82b56cf65f0f8e802a708612edc4e9a4790af
-cd ..
+# 上游引擎不在本仓库。fetch-engine.py 会校验所需文件与资源。
+# 未设置 GITHUB_TOKEN 时很容易触发 GitHub API 的匿名限流。
+GITHUB_TOKEN="<你的 GitHub Token>" python3 tools/fetch-engine.py \
+  JamesQiu2005/SpektraLab \
+  02d82b56cf65f0f8e802a708612edc4e9a4790af \
+  .
 
-# 应用 iOS 补丁并生成真机 Metal 资源
 python3 tools/apply-ios-patch.py engine
+```
+
+### 准备 LibRaw 与 Metal 资源
+
+```bash
+# 下载并校验固定的 LibRaw 0.22.2
+bash engine/setup-libraw.sh
+
+# 编译真机 Metal 内核，并打包 profiles / LUT / 色彩配置
 ios/Tools/build-engine.sh bundle device
+```
 
-# 生成 Xcode 工程
+### 生成工程
+
+```bash
 python3 ios/Tools/gen-project.py
-
-# 打开工程
 open ios/SpektraLab.xcodeproj
 ```
 
-在 Xcode 的 Signing & Capabilities 中选择自己的 Team，然后选择已连接的 iPhone 运行。
+在 Xcode 的 **Signing & Capabilities** 中选择自己的 Team，然后连接 iPhone 运行。
 
-命令行无签名编译：
+App 图标是可选项。需要重新生成时：
+
+```bash
+python3 -m pip install Pillow
+python3 tools/make-app-icon.py
+cp ios/SpektraLab/Assets.xcassets/AppIcon.appiconset/icon-60@2x.png \
+   ios/SpektraLab/AppIcon60x60@2x.png
+cp ios/SpektraLab/Assets.xcassets/AppIcon.appiconset/icon-60@3x.png \
+   ios/SpektraLab/AppIcon60x60@3x.png
+python3 ios/Tools/gen-project.py
+```
+
+模拟器必须重新打包模拟器版本，不能复用真机 `.metallib`：
+
+```bash
+ios/Tools/build-engine.sh bundle simulator
+python3 ios/Tools/gen-project.py
+```
+
+命令行无签名真机构建：
 
 ```bash
 xcodebuild \
@@ -321,26 +183,18 @@ xcodebuild \
   build
 ```
 
-模拟器必须使用单独编译的 Metal 资源：
-
-```bash
-ios/Tools/build-engine.sh bundle simulator
-```
-
-真机和模拟器的 `.metallib` 不能混用。构建脚本会为 Xcode 27 的模拟器显式使用 `air64-apple-ios27.0-simulator` target。
-
 ## GitHub Actions
 
-每次向 `main` 推送代码时，工作流会：
+向 `main` 推送代码后，工作流会：
 
-1. 获取固定提交的上游引擎。
-2. 应用 iOS 补丁。
-3. 编译 Metal 内核并发布首次启动所需的引擎资源。
-4. 生成 Xcode 工程和 App 图标。
-5. 构建并打包 IPA。
-6. 更新滚动的 `latest` Release。
+1. 通过 API 获取固定提交的上游引擎并应用 iOS 补丁。
+2. 下载并校验 LibRaw 0.22.2。
+3. 编译安全数学模式的 Metal 内核，打包引擎资源。
+4. 生成 App 图标与 Xcode 工程。
+5. 无签名构建，并按可重签格式打包 IPA。
+6. 替换滚动的 `latest` Release。
 
-未配置签名 secret 时，CI 仍会发布可供 SideStore、AltStore、Sideloadly 或 Xcode 重签的 IPA。若要生成带开发证书的 IPA，需要在仓库的 Actions secrets 中配置：
+未配置签名 secret 时，发布的 IPA 需要 SideStore、AltStore、Sideloadly 或 Xcode 重签。要生成带开发证书的 IPA，需要配置：
 
 - `IOS_CERTIFICATE_P12`
 - `IOS_CERTIFICATE_PASSWORD`
@@ -352,29 +206,34 @@ ios/Tools/build-engine.sh bundle simulator
 
 不要把证书、密码、GitHub Token 或 Apple ID 凭据提交到仓库。
 
-## 目录结构
+## 目录
 
 | 路径 | 内容 |
 |---|---|
-| `ios/SpektraLab/` | SwiftUI 界面、图片导入、Metal 画布、状态与导出逻辑 |
-| `ios/Tools/` | Metal 资源、Xcode 工程与 IPA 构建脚本 |
-| `tools/` | 上游引擎下载、iOS 补丁和图标工具 |
-| `.github/workflows/` | GitHub Actions 自动构建与 Release 发布 |
-| `docs/` | iOS 移植技术说明 |
+| `ios/SpektraLab/` | SwiftUI 界面、片边/日期控制、RAW/JPEG 导入、Metal 画布、状态与导出 |
+| `ios/Tools/` | Metal 资源、Xcode 工程与 IPA 打包脚本 |
+| `tools/` | 上游引擎下载、iOS 补丁与图标工具 |
+| `.github/workflows/` | CI 构建与 Release 发布 |
+| `docs/` | iOS 移植技术说明、联系表、界面截图与构建记录 |
+
+更深入的技术决策见 [`docs/IOS-PORT-NOTES.md`](docs/IOS-PORT-NOTES.md)。
 
 ## 已知限制
 
-- Sony ARW 支持取决于 iOS/Core Image 是否支持对应相机型号。
+- Core Image 不支持的相机 RAW 会尝试 LibRaw；个别厂商压缩格式仍可能无法解码。
 - Apple ProRAW 建议从“文件”导入原始 DNG；从照片库选择时，系统有时只提供渲染后的图像。
-- 当前解码上限为 6400 万像素；原始分辨率导出会比低清预览耗时、占用更多内存。
-- 清理缓存后从安装包重新解包资源，无需下载。
-- 曲线编辑器、色轮、批量处理、片边、日期后背、半格拼接和几何裁剪尚未在 iPhone UI 中开放。
-- 免费 Apple ID 侧载签名通常需要每 7 天续签。
+- 全尺寸 RAW 导出以及片边/日期合成已在 iOS 27.2 模拟器验证；尚未在目标 iPhone 上完成内存峰值和相册写入复测。
+- 当前解码上限为 6400 万像素；全尺寸导出会比低清预览更耗时，也占用更多内存。
+- 开启片边会为了匹配真实片幅而居中裁切照片，竖图仍保持竖向构图；当前 UI 尚未提供手动移动裁切框。
+- 日期后背在 135 与 120 645–6×9 上可用；全景片幅按真实相机限制不提供日期。
+- 曲线编辑器、色轮、批量处理、半格拼接和几何裁剪尚未在 iPhone UI 中开放。
+- 免费 Apple ID 的侧载签名通常需要每 7 天续签。
 
 ## 许可与致谢
 
 - 核心引擎与胶片过程模型：[JamesQiu2005/SpektraLab](https://github.com/JamesQiu2005/SpektraLab)，GPL-3.0-or-later。
 - 胶片模型、实测配置与放大 LUT：[Andrea Volpato/spektrafilm](https://github.com/andreavolpato/spektrafilm)，CC BY-SA 4.0。
+- RAW 回退解码：[LibRaw](https://github.com/LibRaw/LibRaw) 0.22.2，LGPL-2.1 / CDDL-1.0。
 - iOS 移植代码：GPL-3.0-or-later。
 
 代码按 **GPL-3.0-or-later** 分发；胶片与相纸配置按 **CC BY-SA 4.0** 分发。第三方项目的商标和名称归各自权利人所有。
