@@ -5,7 +5,7 @@
 
 ## 一句话现状
 
-> 2026-11-06 最新状态（v1.2.0，发布中）：
+> 2026-11-06 最新状态（v1.2.0，已发布）：
 >
 > - 开发目标仍是 iOS 27.0 / Xcode 27.2。
 > - App 首页已重构为照片墙：多图导入、编辑返回后刷新缩略图，底部常驻
@@ -38,8 +38,9 @@
 > - 全尺寸片边导出已验证：135 + 日期为 `6446×5946`，120/645 + 日期为 `5658×4188`。
 >   输出 JPEG 中齿孔、片边字、格号、日期与拍摄数据均完整。
 > - 仍未在目标真机上复测相册写入、长时间内存和胶片切换。
-> - 真机无签名包由 CI 按 `repack-ipa.py` 生成，版本为 `1.2.0 (6)`；CI 成功后会替换
->   `latest` Release。
+> - 真机无签名包由 CI 按 `repack-ipa.py` 生成，版本为 `1.2.0 (6)`，已发布到
+>   [`latest` Release](https://github.com/Minerchu/SpektraLab-iOS/releases/tag/latest)；
+>   对应提交 `e5cc4e7`、CI run `42062994969`。
 >
 > Xcode 27 的 simulator Metal 编译必须显式传
 > `--target=air64-apple-ios27.0-simulator`，否则即使使用 `iphonesimulator` SDK
