@@ -34,7 +34,7 @@
 name: Build IPA
 on:
   push:
-    branches: [main]
+    branches: [main, 'perf/ios16-interaction-debug']
     # Documentation does not need forty minutes on a macOS runner, and
     # `cancel-in-progress` above means a typo in the README would otherwise
     # cancel a build that is about to finish.
@@ -147,7 +147,7 @@ jobs:
       # and all it reports is "Failed to get bundle ID". The URL in
       # `EngineBridge.remoteAssets` points at this tag and file name.
       - name: Publish the engine assets
-        if: ${{ github.event_name != 'pull_request' }}
+        if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
