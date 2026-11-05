@@ -156,6 +156,12 @@ final class ViewModel: ObservableObject {
     private var frame: DecodedFrame?
     /// The photograph's own long/short ratio, before a film gate crops it.
     private var naturalAspect: CGFloat = 3.0 / 2.0
+    /// Gate and orientation changes re-decode the photograph. Coalesce them so
+    /// a slow, older decode can never finish last and restore the previous
+    /// direction after the user has picked a new one.
+    private var effectReloadNeeded = false
+    private var effectReloadRunning = false
+    private var sourceGeneration = 0
 
     // MARK: - the engine
 
@@ -287,6 +293,8 @@ final class ViewModel: ObservableObject {
     }
 
     private func importData(_ data: Data, typeHint: UTType? = nil) async throws {
+        sourceGeneration &+= 1
+        effectReloadNeeded = false
         originalData = data
         originalTypeHint = typeHint
         // The preview decode is small: the live tier renders at 2048 px on
@@ -477,35 +485,48 @@ final class ViewModel: ObservableObject {
     /// before the engine sees the frame. A toggle-off reloads the full frame,
     /// restoring the part the rebate had cropped away.
     private func reloadPreviewForFilmEffect() {
-        guard let data = originalData else {
+        guard originalData != nil else {
             scheduleEffectRender()
             return
         }
-        let hint = originalTypeHint
-        state = .importing
-        statusText = filmBorderEnabled ? "正在裁切到 \(gateDisplayName)…" : "正在恢复完整画面…"
+        effectReloadNeeded = true
+        guard !effectReloadRunning else { return }
+        effectReloadRunning = true
         Task { @MainActor [weak self] in
             guard let self else { return }
-            do {
-                let decoded = try await Task.detached(priority: .userInitiated) {
-                    try ImageDecoder.decode(data: data,
-                                            maxLongEdge: ImageDecoder.previewLongEdge,
-                                            typeHint: hint)
-                }.value
-                self.naturalAspect = CGFloat(decoded.width) / CGFloat(max(decoded.height, 1))
-                let gate = self.selectedGate
-                if !gate.supportsDateBack {
-                    self.dateBackEnabled = false
-                    self.dateBackPlacement = .frame
+            while self.effectReloadNeeded {
+                self.effectReloadNeeded = false
+                self.state = .importing
+                self.statusText = self.filmBorderEnabled
+                    ? "正在裁切到 \(self.gateDisplayName)…"
+                    : "正在恢复完整画面…"
+                do {
+                    guard let data = self.originalData else { break }
+                    let sourceGeneration = self.sourceGeneration
+                    let hint = self.originalTypeHint
+                    let decoded = try await Task.detached(priority: .userInitiated) {
+                        try ImageDecoder.decode(data: data,
+                                                maxLongEdge: ImageDecoder.previewLongEdge,
+                                                typeHint: hint)
+                    }.value
+                    guard sourceGeneration == self.sourceGeneration else { continue }
+                    self.naturalAspect = CGFloat(decoded.width) / CGFloat(max(decoded.height, 1))
+                    let gate = self.selectedGate
+                    if !gate.supportsDateBack {
+                        self.dateBackEnabled = false
+                        self.dateBackPlacement = .frame
+                    }
+                    let framed = self.filmBorderEnabled
+                        ? decoded.centerCropped(toTargetAspect: self.filmCropAspect)
+                        : decoded
+                    try await self.loadFrame(framed)
+                } catch {
+                    self.state = .failed(error.localizedDescription)
+                    self.statusText = "片边载入失败"
                 }
-                let framed = self.filmBorderEnabled
-                    ? decoded.centerCropped(toTargetAspect: self.filmCropAspect)
-                    : decoded
-                try await self.loadFrame(framed)
-            } catch {
-                self.state = .failed(error.localizedDescription)
-                self.statusText = "片边载入失败"
             }
+            self.effectReloadRunning = false
+            if self.effectReloadNeeded { self.reloadPreviewForFilmEffect() }
         }
     }
 
