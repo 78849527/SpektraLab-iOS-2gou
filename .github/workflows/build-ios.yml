@@ -77,7 +77,7 @@ jobs:
       HAVE_IDENTITY: ${{ secrets.IOS_CERTIFICATE_IDENTITY != '' }}
       HAVE_PROFILE_NAME: ${{ secrets.IOS_PROVISIONING_PROFILE_NAME != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       # The engine is upstream's, and it is not in this repository: this one
       # carries the app, the patch and the build scripts, and the engine comes
       # from the upstream project at a pinned commit.
@@ -535,7 +535,7 @@ jobs:
           echo "::notice::build/ipa/SpektraLab.ipa is not device-installable as it stands: re-sign it with your own Apple ID (AltStore/Sideloadly/Xcode), or set the seven signing secrets to get a signed export."
       - name: Upload the IPA
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: SpektraLab-IPA
           path: build/ipa/*.ipa
@@ -582,7 +582,7 @@ jobs:
             --jq '.url, (.assets[] | "\(.name)  \(.size) bytes")'
       - name: Upload the build log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: build-log
           path: build/*.log
