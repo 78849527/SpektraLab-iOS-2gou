@@ -1,121 +1,194 @@
 # SpektraLab for iOS
 
-把 [SpektraLab](https://github.com/JamesQiu2005/SpektraLab) 的胶片/相纸物理模拟引擎搬到 iPhone。
+SpektraLab 的 iPhone 社区移植版。它使用 C++20 与 Metal 运行真实的胶片/相纸物理模拟：照片会经过胶片曝光、染料层、颗粒、光晕、放大和相纸成像流程，而不是简单套用一张 LUT。
 
-打开一张 RAW，选好胶片和相纸，几秒内得到一张按物理过程建模的照片——81 个波长穿过染料层，颗粒、光晕、成色剂耦合按画幅的微米尺度计算，不是 LUT。
+> 本项目不是 SpektraLab 官方 iOS 客户端。核心引擎来自 [JamesQiu2005/SpektraLab](https://github.com/JamesQiu2005/SpektraLab)，本仓库维护 iOS 界面、RAW/JPEG 导入、Metal 适配、照片导出和自动构建。
 
-> 这是社区移植，不是上游官方版本。引擎来自上游 `main` 分支（C++20 + Metal），本仓库只包含 iOS 应用、引擎的 iOS 补丁与构建脚本。
+## 当前版本
 
-## 为什么 iOS 走 Metal 而不是 Vulkan
-
-安卓版走 Vulkan，因为 Android 没有 Metal。iOS 原生就是 Metal，所以这一版**直接复用上游已有的 Metal 后端**（`engine/src/gpu/metal_gpu.cpp`），不碰 Vulkan。
-
-这不是抄近路，是抄到了更近的路：
-
-- **引擎的 Metal 后端可移植性极好**——纯 C++ + metal-cpp，没有任何 AppKit / UIKit / Cocoa 依赖，着色器是预编译的 `.metallib`（不是运行时编译，合 App Store 审核）。
-- **白捡一个能力**：对比度蒙版（`contrast_mask`）在 Vulkan 后端未移植，安卓版只能显式拒绝；Metal 后端是完整的。
-- **少一层转换**：Vulkan 在 iOS 上要靠 MoltenVK 转译，多一层损耗和一层不确定性。
-
-`engine/src/gpu/metal_gpu.cpp` 是唯一需要改的引擎文件，改了三处，都记在 `tools/apply-ios-patch.py` 里。
-
-## 引擎的改动
-
-| 改动 | 为什么 |
+| 项目 | 状态 |
 |---|---|
-| 内存压力监控包在 `#if TARGET_OS_OSX` 里 | `DISPATCH_SOURCE_TYPE_MEMORYPRESSURE` 在 iOS SDK 里不存在，不改就编译不过。共用同一个队列的 idle timer 不受影响，它在 iOS 上照常工作。 |
-| 结果纹理 usage flag | 曾尝试加 `MTLTextureUsageCopySource`，但 `metal-cpp` 里没定义这个枚举（metal-cpp 不完备），实际 blit 回读也不需要它 —— 保留上游的 `ShaderRead`。 |
-| `GPUFamilyMac2` 包在 `#if TARGET_OS_OSX` 里 | iOS 没有这个 family。 |
+| 最低系统 | iOS 27.0 |
+| 开发环境 | Xcode 27.2、Swift 6、C++20、Metal |
+| 界面 | 原生 Liquid Glass，底部横向胶片/相纸选择条 |
+| 导入 | JPEG、Apple RAW/DNG，以及系统支持的 Sony ARW |
+| 导出 | 8-bit sRGB JPEG，最高长边 3840 px |
+| 预览 | 保持原始宽高比，支持缩放、拖动和双击复位 |
+| 配置 | 26 款胶片/正片配置、7 款相纸配置 |
 
-补丁脚本每处改动都先断言命中次数，全部命中才写盘，并且检查 `#if`/`#endif` 是否平衡——一个悄悄没打上的补丁，会在很远的地方以「引擎 bug」的样子炸掉。
+目前仍处于测试阶段。不同 iPhone 和 iOS 版本支持的相机 RAW 型号可能不同，重要照片请保留原文件。
 
 ## 下载
 
-打开 **[latest release](https://github.com/Minerchu/SpektraLab-iOS/releases/latest)**，
-下载里面那个 `SpektraLab-<提交号>.ipa`。
+前往 **[Latest Release](https://github.com/Minerchu/SpektraLab-iOS/releases/latest)** 下载最新 IPA。文件名包含提交号，用于避免 GitHub CDN 返回旧版本。
 
-文件名带提交号不是装饰。`releases/download/<tag>/<固定名>` 走 CDN，同名替换后
-一段时间内仍会返回**旧文件**——你会装上旧包，侧载时看到
-`Failed to get bundle ID`（旧包的 `Payload/` 目录结构和 Info.plist 都不对）。
-每次文件名都不同，就不会撞上这层缓存。
+Release 中有两个文件：
 
-未配签名 secret 时这个 IPA 需要你自己重签才能装到手机——见下面「装到手机上」一节。
-
-## 目录
-
-| 路径 | 内容 |
+| 文件 | 用途 |
 |---|---|
-| `ios/SpektraLab/` | 应用：SwiftUI 界面、Swift↔C 桥接、Metal 画布、ImageIO 解码 |
-| `ios/Tools/` | 构建脚本：引擎内核、生成 Xcode 工程、打包 IPA |
-| `tools/` | 引擎补丁、图标生成 |
-| `.github/workflows/` | 云端构建 IPA |
+| `SpektraLab-<提交号>-unsigned.ipa` | SideStore、AltStore 等会自行重签的工具，推荐这类工具使用 |
+| `SpektraLab-<提交号>.ipa` | ad-hoc 封签版，供 Sideloadly、Xcode 或其他签名流程使用 |
 
-## 构建
+GitHub Release 中的 IPA 不带你的个人开发证书，不能直接双击安装，必须先用自己的 Apple ID 或开发证书重签。
 
-### 云端（不需要 Mac）
+## 安装
 
-GitHub Actions 会在 macOS runner 上拉引擎、打补丁、编译内核、构建签名、导出 IPA。
+### SideStore / AltStore
 
-需要先在仓库的 **Settings → Secrets and variables → Actions** 里加这几个 secret：
+1. 下载 `SpektraLab-<提交号>-unsigned.ipa`。
+2. 在 SideStore 或 AltStore 中选择该文件。
+3. 使用自己的 Apple ID 完成重签和安装。
+4. 免费 Apple ID 的签名通常 7 天后过期，需要重新签名。
 
-| Secret | 内容 |
-|---|---|
-| `IOS_CERTIFICATE_P12` | `.p12` 的 base64（macOS 上 `base64 -i cert.p12 \| pbcopy`） |
-| `IOS_CERTIFICATE_PASSWORD` | `.p12` 的密码 |
-| `IOS_CERTIFICATE_IDENTITY` | 证书名，如 `Apple Development: Zhang San (ABCDE12345)` |
-| `IOS_PROVISIONING_PROFILE` | `.mobileprovision` 的 base64 |
-| `IOS_PROVISIONING_PROFILE_NAME` | 描述文件在 Xcode 里显示的名字 |
-| `IOS_TEAM_ID` | 十位团队 ID |
-| `IOS_BUNDLE_ID` | 描述文件对应的 bundle id |
+### Sideloadly
 
-然后点 **Actions → Build IPA → Run workflow**。IPA 会出现在该次运行的 **Artifacts → SpektraLab-IPA** 里。
+1. 下载普通的 `SpektraLab-<提交号>.ipa`。
+2. 连接 iPhone，在 Sideloadly 中选择 IPA。
+3. 使用自己的 Apple ID 签名并安装。
 
-没配 secret 也能跑，但产物需要自己重签才能装手机——工作流会在日志里明确警告。成功构建后 IPA 会自动发布到 [latest release](https://github.com/Minerchu/SpektraLab-iOS/releases/latest)。
+### Xcode
 
-### 本地（有 Mac）
+克隆仓库，在 Xcode 中登录 Apple ID，把 Signing 设置为自己的 Personal Team，然后连接 iPhone 运行。设备必须满足 iOS 27.0 最低版本。
+
+## 使用方法
+
+1. 首次启动时等待约 15 MB 的引擎资源下载完成。资源会保存在应用缓存中，之后启动不需要重复下载。
+2. 点击顶部照片按钮，从系统相册导入 JPEG、Apple RAW 或 DNG。
+3. Sony ARW 建议使用“从文件导入 Sony ARW / RAW”，这样应用可以读取原始文件，而不是相册生成的预览图。
+4. 在底部横向滑动并选择胶片，再切换到“相纸”选择相纸。
+5. 在“调整”中修改曝光、颗粒、光晕等参数。
+6. 双指放大预览，放大后拖动查看细节；双击照片恢复适合屏幕。
+7. 点击右上角导出按钮，应用会重新渲染并以 JPEG 保存到系统相册。
+
+## 图片与颜色管线
+
+### 导入
+
+- JPEG 通过 ImageIO 解码。
+- Apple RAW/DNG 和 Sony ARW 优先通过 Core Image 的 RAW 解码器读取。
+- RAW 解码会关闭 Core Image 默认的额外曝光、全局曲线、局部 tone map、EDR 和 gamut mapping，避免同一张照片在 iOS 上被重复提亮。
+- 解码结果转换为引擎需要的线性 ProPhoto RGB。
+- 预览长边限制为 2048 px，以降低手机内存和实时切换胶片时的负担。
+
+Sony ARW 是否可解码由 iOS/Core Image 对具体相机型号的支持决定。无法识别时应用会显示导入错误，不会把错误数据继续交给胶片引擎。
+
+### 预览与导出
+
+- 引擎输出固定为 sRGB，与桌面预览主机保持一致。
+- 画布按照片真实比例显示，不再把竖图或横图压进固定 2:3 框架。
+- 导出会重新读取原始文件并完整运行胶片流程。
+- 为避免高像素 RAW 导出时被 iOS 内存限制终止，导出长边上限为 3840 px。
+- Metal 纹理按行分块读取，JPEG 直接写入临时文件，避免同时生成多个全尺寸内存副本。
+- 无论导入 JPEG 还是 RAW，最终都保存为带 sRGB 描述的 JPEG。
+
+## 界面
+
+- iOS 27 上使用系统原生 Liquid Glass。
+- 胶片和相纸采用底部横向选择条，切换时照片始终可见。
+- 配置文件只包含实测参数和名称，不包含官方胶片封面，因此当前使用统一胶卷徽标和颜色区分各配置。
+- 顶部区域保持紧凑，为照片预览保留更多空间。
+
+## 本地构建
+
+### 要求
+
+- macOS
+- Xcode 27.2 或更新版本
+- iOS 27 SDK
+- Apple silicon Mac
+- 如需安装到真机，需要在 Xcode 登录 Apple ID
+
+### 构建步骤
 
 ```bash
 git clone https://github.com/Minerchu/SpektraLab-iOS.git
 cd SpektraLab-iOS
 
-# 1) 上游引擎
+# 获取仓库固定版本的上游引擎
 git clone https://github.com/JamesQiu2005/SpektraLab.git engine
-cd engine && git checkout 02d82b56 && cd ..
+cd engine
+git checkout 02d82b56cf65f0f8e802a708612edc4e9a4790af
+cd ..
 
-# 2) 打 iOS 补丁、编译内核、生成工程、构建签名、导出 IPA
-export SPEKTRAFILM_SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"
-export SPEKTRAFILM_TEAM_ID=TEAMID
-export SPEKTRAFILM_PROVISIONING_PROFILE="Your Profile"
-export SPEKTRAFILM_BUNDLE_ID=com.hanze.spektralab
+# 应用 iOS 补丁并生成真机 Metal 资源
+python3 tools/apply-ios-patch.py engine
+ios/Tools/build-engine.sh bundle device
 
-ios/Tools/build-ipa.sh
+# 生成 Xcode 工程
+python3 ios/Tools/gen-project.py
+
+# 打开工程
+open ios/SpektraLab.xcodeproj
 ```
 
-产物在 `build/ipa/`。
+在 Xcode 的 Signing & Capabilities 中选择自己的 Team，然后选择已连接的 iPhone 运行。
 
-## 装到手机上
+命令行无签名编译：
 
-IPA 不能直接双击安装。三种办法：
+```bash
+xcodebuild \
+  -project ios/SpektraLab.xcodeproj \
+  -scheme SpektraLab \
+  -configuration Release \
+  -destination 'generic/platform=iOS' \
+  CODE_SIGNING_ALLOWED=NO \
+  build
+```
 
-1. **AltStore / SideStore**（免费，推荐）—— 把 IPA 拖进 AltStore，它会用你的 Apple ID 重签。免费账号的签名 **7 天**过期，到期重签即可。
-2. **Sideloadly** —— Windows 上直接刷，连接手机后点一下。同样 7 天。
-3. **付费开发者账号 + Ad Hoc 描述文件** —— 把手机的 UDID 加进描述文件，签名有效期 **1 年**，不用每周重签。
+模拟器必须使用单独编译的 Metal 资源：
+
+```bash
+ios/Tools/build-engine.sh bundle simulator
+```
+
+真机和模拟器的 `.metallib` 不能混用。构建脚本会为 Xcode 27 的模拟器显式使用 `air64-apple-ios27.0-simulator` target。
+
+## GitHub Actions
+
+每次向 `main` 推送代码时，工作流会：
+
+1. 获取固定提交的上游引擎。
+2. 应用 iOS 补丁。
+3. 编译 Metal 内核并发布首次启动所需的引擎资源。
+4. 生成 Xcode 工程和 App 图标。
+5. 构建并打包 IPA。
+6. 更新滚动的 `latest` Release。
+
+未配置签名 secret 时，CI 仍会发布可供 SideStore、AltStore、Sideloadly 或 Xcode 重签的 IPA。若要生成带开发证书的 IPA，需要在仓库的 Actions secrets 中配置：
+
+- `IOS_CERTIFICATE_P12`
+- `IOS_CERTIFICATE_PASSWORD`
+- `IOS_CERTIFICATE_IDENTITY`
+- `IOS_PROVISIONING_PROFILE`
+- `IOS_PROVISIONING_PROFILE_NAME`
+- `IOS_TEAM_ID`
+- `IOS_BUNDLE_ID`
+
+不要把证书、密码、GitHub Token 或 Apple ID 凭据提交到仓库。
+
+## 目录结构
+
+| 路径 | 内容 |
+|---|---|
+| `ios/SpektraLab/` | SwiftUI 界面、图片导入、Metal 画布、状态与导出逻辑 |
+| `ios/Tools/` | Metal 资源、Xcode 工程与 IPA 构建脚本 |
+| `tools/` | 上游引擎下载、iOS 补丁和图标工具 |
+| `.github/workflows/` | GitHub Actions 自动构建与 Release 发布 |
+| `docs/` | iOS 移植技术说明 |
 
 ## 已知限制
 
-- **最低系统 iOS 27.0**，界面使用系统原生 Liquid Glass；工程按 Xcode 27 SDK 构建。
-- **RAW 解码依赖 Core Image / ImageIO**，不是 LibRaw。选择照片时优先读取原始 RAW 字节；解码时把 Core Image RAW 输出固定到 sRGB 后再进入引擎的线性 ProPhoto 输入空间。支持随 iOS 版本和机型变化的 ARW / Apple RAW / DNG 等格式，解不了的格式会明确报错，不会悄悄渲错。
-- **导入预览按长边 2048 px 缩放**。引擎的 live 档渲染上限是长边 2048 px，预览用不着更大的图；导出时重新解码，长边限制为 3840 px 以控制真机内存峰值。
-- **导出是 8-bit sRGB JPEG**。无论导入 JPG 还是 RAW，保存到相册前都会明确编码为 JPEG；工作空间是 ProPhoto RGB，导出时转换到 sRGB。
-- **预览保持照片原始宽高比**，不会再强塞进固定 2:3 画布；双指可放大到 4 倍，放大后可拖动，双击恢复适合屏幕。
-- **胶片与相纸位于底部横向选择条**，切换时照片保持可见。配置文件只包含测量数据和名称，没有官方封面图，因此界面使用稳定的胶卷徽标，不再拿导入照片冒充胶片缩略图。
-- **首次启动需要约 15 MB 引擎资源**。资源下载一次后保存在应用缓存；网络不可用时会显示明确错误。真机与模拟器使用各自编译的 Metal 资源，不能混用。
-- 片边（Film Edge）、日期后背、半格拼接、几何裁剪**引擎侧已实现但 UI 未接**——和安卓版一样。
-- 曲线编辑器、色轮、胶片条、多窗口、Agent/MCP server 这些 macOS 桌面形态的功能**没有移植**，iPhone 上用不上。
+- Sony ARW 支持取决于 iOS/Core Image 是否支持对应相机型号。
+- Apple ProRAW 建议从“文件”导入原始 DNG；从照片库选择时，系统有时只提供渲染后的图像。
+- 导出最高为长边 3840 px，不是相机传感器的完整原始分辨率。
+- 首次启动必须联网下载引擎资源；清理应用缓存后会重新下载。
+- 曲线编辑器、色轮、批量处理、片边、日期后背、半格拼接和几何裁剪尚未在 iPhone UI 中开放。
+- 免费 Apple ID 侧载签名通常需要每 7 天续签。
 
-## 致谢与许可
+## 许可与致谢
 
-- 引擎、胶片过程模型与上游实现：[JamesQiu2005/SpektraLab](https://github.com/JamesQiu2005/SpektraLab) — GPL-3.0-or-later
-- 胶片模型、28 款实测配置与放大 LUT：[Andrea Volpato 的 spektrafilm](https://github.com/andreavolpato/spektrafilm) — CC BY-SA 4.0
-- 本仓库：iOS 移植（Metal 引擎适配、SwiftUI 界面、ImageIO 解码、CI 打包）— GPL-3.0-or-later
+- 核心引擎与胶片过程模型：[JamesQiu2005/SpektraLab](https://github.com/JamesQiu2005/SpektraLab)，GPL-3.0-or-later。
+- 胶片模型、实测配置与放大 LUT：[Andrea Volpato/spektrafilm](https://github.com/andreavolpato/spektrafilm)，CC BY-SA 4.0。
+- iOS 移植代码：GPL-3.0-or-later。
 
-代码以 **GPL-3.0-or-later** 分发；胶片与相纸配置以 **CC BY-SA 4.0** 分发。
+代码按 **GPL-3.0-or-later** 分发；胶片与相纸配置按 **CC BY-SA 4.0** 分发。第三方项目的商标和名称归各自权利人所有。
