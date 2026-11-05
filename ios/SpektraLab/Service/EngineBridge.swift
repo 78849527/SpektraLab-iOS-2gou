@@ -129,11 +129,9 @@ final class SpektraEngine {
 
     /// Where the engine's baked resources live in the app bundle.
     ///
-    /// The Xcode project carries `ios/SpektraLab/Resources` as a folder
-    /// reference, so everything under it lands in the bundle at
-    /// `Resources/`. The engine's assets sit in `Resources/engine/`, and the
-    /// engine resolves every one of them relative to that directory — so this
-    /// is the *directory*, not the constants file.
+    /// The packed archive is copied to the root of the shallow iOS bundle.
+    /// A root-level folder literally named `Resources` makes CoreFoundation
+    /// treat the app as a deep macOS bundle and fail to find Info.plist.
     ///
     /// `Bundle.main` is right here: this is the app, not a test bundle (the
     /// macOS app uses `Bundle(for:)` because its unit-test target is
@@ -141,9 +139,8 @@ final class SpektraEngine {
     /// Three shapes are supported, in this order:
     ///
     /// 1. `SPEKTRAFILM_ENGINE_RESOURCES` -- a plain directory, for tests.
-    /// 2. `Resources/engine/` -- loose files, which is what a local build
-    ///    (`ios/Tools/build-engine.sh bundle`) lays down.
-    /// 3. `Resources/engine-assets.bin` -- one packed archive, which is what
+    /// 2. `Resources/engine/` -- legacy loose-file development builds.
+    /// 3. `engine-assets.bin` -- one packed archive, which is what
     ///    the CI ships.
     ///
     /// The third exists because of a device-side limit, not a design choice:
@@ -165,8 +162,7 @@ final class SpektraEngine {
             return bundled.deletingLastPathComponent()
         }
         if let archive = Bundle.main.url(forResource: "engine-assets",
-                                         withExtension: "bin",
-                                         subdirectory: "Resources"),
+                                         withExtension: "bin"),
            let unpacked = unpackBundledResources(archive) {
             return unpacked
         }

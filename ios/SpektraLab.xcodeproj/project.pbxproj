@@ -39,7 +39,15 @@
 			path = "Model";
 			sourceTree = "<group>";
 		};
-		DB4A69182F62F25C0AEBC961 /* Resources */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Resources; sourceTree = "<group>"; };
+		1B8D604DB29AAA97A51EA81A /* engine-assets.bin */ = {isa = PBXFileReference; lastKnownFileType = file; path = "engine-assets.bin"; sourceTree = "<group>"; };
+		E91F18A31A1980589C11CA85 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				1B8D604DB29AAA97A51EA81A /* engine-assets.bin */
+			);
+			path = "Resources";
+			sourceTree = "<group>";
+		};
 		E726C6EED977FC546A55E678 /* CrashLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CrashLog.swift"; sourceTree = "<group>"; };
 		AA0C4AC58357578FABC8BD73 /* EngineBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EngineBridge.swift"; sourceTree = "<group>"; };
 		23E72355523F1F85756E886C /* SpektraLab-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "SpektraLab-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -64,7 +72,7 @@
 				82BC613FBF20D36E130F8DB1 /* Canvas */,
 				CB77A531F6BDF61993E7E131 /* Import */,
 				8DC45243D2F7398E45C0638F /* Model */,
-				DB4A69182F62F25C0AEBC961 /* Resources */,
+				E91F18A31A1980589C11CA85 /* Resources */,
 				291542805F9C50034FBB2D47 /* Service */,
 				A3683B4388735BD2619A86E7 /* ContentView.swift */,
 				AC1103EAAEEF5ACAFDF57005 /* Info.plist */,
@@ -239,13 +247,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		B663863AD126A4768BAE9A7F /* Assets.xcassets */ = {isa = PBXBuildFile; fileRef = 89E16FC080E6CEAED03F1090; };
-		BCE0E263206CC549F761CF84 /* Resources */ = {isa = PBXBuildFile; fileRef = DB4A69182F62F25C0AEBC961; };
+		30D31A838BCFD72486198123 /* engine-assets.bin */ = {isa = PBXBuildFile; fileRef = 1B8D604DB29AAA97A51EA81A; };
 		C831EECBAB01524E02C71B42 /* app-resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				B663863AD126A4768BAE9A7F /* Assets.xcassets */,
-				BCE0E263206CC549F761CF84 /* Resources */
+				30D31A838BCFD72486198123 /* engine-assets.bin */
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -271,19 +279,19 @@
 			shellPath = /bin/sh;
 			shellScript = "\"$SRCROOT/Tools/check-engine-resources.sh\"\n";
 		};
-		89A256B2EC36C5BA54DF5527 /* Sign compiled resources */ = {
+		89A256B2EC36C5BA54DF5527 /* Prepare compiled resources */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputPaths = (
 			);
-			name = "Sign compiled resources";
+			name = "Prepare compiled resources";
 			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "app=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nif [ -n \"$EXPANDED_CODE_SIGN_IDENTITY\" ]; then\n	for resource in \"$app\"/*.metallib \"$app\"/Assets.car \"$app\"/*.png \"$app\"/Resources/engine-assets.bin; do\n		if [ -f \"$resource\" ]; then\n			/usr/bin/codesign --force --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" --timestamp=none \"$resource\"\n		fi\n	done\nfi\n";
+			shellScript = "app=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then\n	exit 0\nfi\nif [ -d \"$app\" ]; then\n	find \"$app\" -type f ! -name \"$EXECUTABLE_NAME\" -exec chmod a-x {} +\nfi\nif [ -n \"$EXPANDED_CODE_SIGN_IDENTITY\" ]; then\n	for resource in \"$app\"/*.metallib \"$app\"/Assets.car; do\n		if [ -f \"$resource\" ]; then\n			/usr/bin/codesign --force --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" --timestamp=none \"$resource\"\n		fi\n	done\nfi\n";
 		};
 		967DE5DAE8F9C3546488D3FD /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -302,6 +310,7 @@
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_BITCODE = NO;
+				ENABLE_DEBUG_DYLIB = NO;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = c11;
@@ -321,6 +330,7 @@
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
+				OTHER_CODE_SIGN_FLAGS = "--deep";
 				OTHER_LDFLAGS = "-framework Metal -framework QuartzCore -framework CoreText -framework CoreGraphics -framework Accelerate";
 				PRODUCT_BUNDLE_IDENTIFIER = com.hanze.spektralab;
 				PRODUCT_NAME = SpektraLab;
@@ -421,6 +431,7 @@
 				CLANG_ENABLE_OBJC_ARC = YES;
 				CODE_SIGNING_ALLOWED = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_DEBUG_DYLIB = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -428,6 +439,7 @@
 				GCC_OPTIMIZATION_LEVEL = 2;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				ONLY_ACTIVE_ARCH = YES;
+				OTHER_CODE_SIGN_FLAGS = "--deep";
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";

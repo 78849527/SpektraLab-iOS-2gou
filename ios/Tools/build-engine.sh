@@ -23,10 +23,11 @@
 #     at all -- they are compiled here, by the Metal compiler, with the flags
 #     below.
 #
-#  The resources are copied into `ios/SpektraLab/Resources/engine`, which the
-#  Xcode project carries as a folder reference, so they land in the app bundle
-#  at `Resources/engine` -- and the engine resolves every asset relative to
-#  that directory.
+#  The resources are packed into `ios/SpektraLab/Resources/engine-assets.bin`.
+#  Xcode references that file, not the enclosing folder, and copies it to the
+#  root of the shallow iOS app bundle. A root-level folder named `Resources`
+#  makes CoreFoundation classify the app as a deep macOS bundle and prevents
+#  CoreSimulator from finding its Info.plist.
 
 set -euo pipefail
 
@@ -101,10 +102,8 @@ build_resources() {
   local product="$engine/resources_product"
   local out="$engine/build/ios"
   local staging="$engine/build/assets"
-  # Not inside the app bundle. A 15 MB payload in the .app makes the
-  # sideloading installer fail when it copies the unpacked IPA to its fixed
-  # `App.app`, reporting only "Failed to get bundle ID". It ships as a release
-  # asset and the app downloads it on first launch.
+  # Keep a second copy for release tooling and diagnostics. The Xcode project
+  # embeds the source-tree copy below as one root-level bundle file.
   local dst="$app/../../build"
 
   echo "==> staging the engine's baked resources"

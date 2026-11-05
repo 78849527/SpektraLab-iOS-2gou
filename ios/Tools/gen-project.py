@@ -33,9 +33,9 @@ Two things about the engine are *not* handled here, on purpose:
 
   * its Metal kernels are compiled by `ios/Tools/build-engine.sh`, not by
     Xcode -- with safe-math, which the engine's startup probe insists on.
-  * its baked constants and profiles are synced into
-    `ios/SpektraLab/Resources/engine/` by the same script, and ride along in
-    the folder reference below.
+  * its baked constants and profiles are packed into
+    `ios/SpektraLab/Resources/engine-assets.bin` by the same script. Xcode
+    copies that file to the root of the shallow iOS app bundle.
 """
 
 from __future__ import annotations
@@ -110,6 +110,7 @@ def file_type(p: Path) -> str:
         ".plist": "text.plist.xml",
         ".entitlements": "text.plist.entitlements",
         ".xcassets": "folder.assetcatalog",
+        ".bin": "file",
         ".md": "net.daringfireball.markdown",
         ".py": "text.script.python",
         ".sh": "text.script.sh",
@@ -131,23 +132,17 @@ class Project:
         for entry in sorted(dir_.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
             if entry.name.startswith("."):
                 continue
-            if entry.is_dir() and entry.suffix != ".xcassets" and entry.name != "Resources":
+            if entry.is_dir() and entry.suffix != ".xcassets":
                 if entry.name in ("build", "DerivedData"):
                     continue
                 children.append((self.group(entry, target_files), entry.name))
             else:
                 fid = uid("file:" + relative_to_project(entry))
                 ft = file_type(entry)
-                if entry.name == "Resources":
-                    self.add(fid,
-                             '{isa = PBXFileReference; lastKnownFileType = folder; '
-                             'path = Resources; sourceTree = "<group>"; }',
-                             "Resources")
-                else:
-                    self.add(fid,
-                             f'{{isa = PBXFileReference; lastKnownFileType = {ft}; '
-                             f'path = "{entry.name}"; sourceTree = "<group>"; }}',
-                             entry.name)
+                self.add(fid,
+                         f'{{isa = PBXFileReference; lastKnownFileType = {ft}; '
+                         f'path = "{entry.name}"; sourceTree = "<group>"; }}',
+                         entry.name)
                 children.append((fid, entry.name))
                 target_files.append((fid, entry))
         kids = ",\n".join(f"\t\t\t\t{cid} /* {cname} */" for cid, cname in children)
@@ -215,11 +210,10 @@ def build() -> str:
     # `.png` included: `CFBundleIconFiles` names `AppIcon60x60`, and iOS looks
     # that up as `AppIcon60x60@2x.png` at the bundle root. Without this the
     # staged icons never made it into the .app.
-    # The packed engine archive is downloaded into Caches on first launch.
-    # Keeping the 15 MB archive out of the install bundle is required for
-    # CoreDevice/iOS 27 sideloading; the app bundle remains small and the
-    # archive can be updated independently of the UI binary.
-    is_res = lambda q: q.suffix in (".xcassets", ".png") or q.name == "Resources"
+    # Keep engine-assets.bin as one root-level bundle resource. A top-level
+    # `Resources/` directory makes CoreFoundation classify a shallow iOS app
+    # as a deep macOS-style bundle and look for Info.plist in the wrong place.
+    is_res = lambda q: q.suffix in (".xcassets", ".png") or q.name == "engine-assets.bin"
     app_sources = phase("PBXSourcesBuildPhase", app_files + engine_files, is_src, "app-sources")
     app_resources = phase("PBXResourcesBuildPhase", app_files, is_res, "app-resources")
     app_frameworks = phase("PBXFrameworksBuildPhase", [], lambda q: False, "app-frameworks")
@@ -314,14 +308,17 @@ def build() -> str:
 
     debug = {"SWIFT_OPTIMIZATION_LEVEL": '"-Onone"', "DEBUG_INFORMATION_FORMAT": "dwarf",
              "ENABLE_TESTABILITY": "YES", "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG",
+             # Keep the executable directly launchable for simulator tests.
+             "ENABLE_DEBUG_DYLIB": "NO",
              # The engine's C++ is -O2 in Debug too: at -O0 its host-side work
              # is an order of magnitude slower, and the Debug app is judged
              # by that. Swift stays -Onone for debugging.
              "GCC_OPTIMIZATION_LEVEL": "2",
              "ONLY_ACTIVE_ARCH": "YES",
-             # A Debug build goes to a simulator or a device, not to a
-             # distribution, so it does not need a provisioning profile.
-             "CODE_SIGNING_ALLOWED": "YES"}
+             # Xcode 27 treats compiled Metal and asset payloads as nested
+             # code. Seal those resources together with the enclosing app.
+             "CODE_SIGNING_ALLOWED": "YES",
+             "OTHER_CODE_SIGN_FLAGS": '"--deep"'}
     # No VALIDATE_PRODUCT: it makes `archive` run builtin-validationUtility,
     # which cannot validate an app on a runner with no signing certificate and
     # fails with the misleading "Archive Missing Bundle Identifier". Export
@@ -354,29 +351,34 @@ def build() -> str:
           '\n\t\t\tshellScript = "\\"$SRCROOT/Tools/check-engine-resources.sh\\"\\n";'
           '\n\t\t}', "Check engine resources")
 
-    # Xcode 27 treats compiled Metal and asset payloads as signable nested
-    # objects. Sign only those resources before the normal enclosing-app
-    # signature. Signing the executable or Info.plist here breaks the final
-    # bundle signature and makes Simulator report a missing bundle ID.
+    # Xcode 27 leaves some compiled resources executable. codesign then treats
+    # them as nested code and refuses to seal the app. They are data, so clear
+    # that bit; only a metallib needs its own ad-hoc signature before Xcode
+    # applies the normal enclosing-app signature.
     sign_resources_script = uid("phase:app:sign-compiled-resources")
     p.add(sign_resources_script,
           '{\n\t\t\tisa = PBXShellScriptBuildPhase;\n'
           '\t\t\tbuildActionMask = 2147483647;\n'
           '\t\t\tfiles = (\n\t\t\t);\n\t\t\tinputPaths = (\n\t\t\t);\n'
-          '\t\t\tname = "Sign compiled resources";\n\t\t\toutputPaths = (\n\t\t\t);\n'
+          '\t\t\tname = "Prepare compiled resources";\n\t\t\toutputPaths = (\n\t\t\t);\n'
           '\t\t\trunOnlyForDeploymentPostprocessing = 0;\n'
           '\t\t\tshellPath = /bin/sh;\n'
           '\t\t\tshellScript = "app=\\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\\"\\n'
+          'if [ \\"$PLATFORM_NAME\\" = \\"iphonesimulator\\" ]; then\\n'
+          '\texit 0\\n'
+          'fi\\n'
+          'if [ -d \\"$app\\" ]; then\\n'
+          '\tfind \\"$app\\" -type f ! -name \\"$EXECUTABLE_NAME\\" -exec chmod a-x {} +\\n'
+          'fi\\n'
           'if [ -n \\"$EXPANDED_CODE_SIGN_IDENTITY\\" ]; then\\n'
-          '\tfor resource in \\"$app\\"/*.metallib \\"$app\\"/Assets.car '
-          '\\"$app\\"/*.png \\"$app\\"/Resources/engine-assets.bin; do\\n'
+          '\tfor resource in \\"$app\\"/*.metallib \\"$app\\"/Assets.car; do\\n'
           '\t\tif [ -f \\"$resource\\" ]; then\\n'
           '\t\t\t/usr/bin/codesign --force --sign \\"$EXPANDED_CODE_SIGN_IDENTITY\\" '
           '--timestamp=none \\"$resource\\"\\n'
           '\t\tfi\\n'
           '\tdone\\n'
           'fi\\n";\n'
-          '\t\t}', "Sign compiled resources")
+          '\t\t}', "Prepare compiled resources")
 
     app_target = uid("target:app")
     project = uid("project")
