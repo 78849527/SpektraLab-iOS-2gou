@@ -4,20 +4,9 @@
 //  path, and the macOS app decodes with Core Image. This file does the same
 //  thing for iOS, and it has to do one thing Core Image does not do for free.
 //
-//  **The engine wants ProPhoto RGB, linear.** `params.hpp` defaults
-//  `io.input_color_space` to `"ProPhoto RGB"` and `io.input_cctf_decoding` to
-//  false, so the pixels handed to `spk_open` are read as *linear* ProPhoto
-//  primaries. ImageIO hands back sRGB — gamma-encoded, in a different gamut.
-//  So a decoded image is converted here: sRGB → linear, then linear sRGB →
-//  linear ProPhoto, by matrix.
-//
-//  The alternative — telling the engine the input is sRGB with a transfer
-//  function (`input_cctf_decoding: true` and `input_color_space: "sRGB"`) —
-//  is what the engine's own parameter schema is for, and it is what a *camera*
-//  frame would use. But a camera RAW is not sRGB: the sensor's response is
-//  linear and its primaries are the camera's own, and pretending otherwise
-//  puts the colour management in the wrong place. The macOS app decodes with
-//  Core Image into the working space itself, and so does this.
+//  **The engine wants ProPhoto RGB, linear.** Core Image converts directly
+//  from the source profile into the same calibrated float working space used
+//  by Mac 1.3.5. There is deliberately no 8-bit sRGB intermediate.
 //
 //  The RAW path is the reason this file exists at all: ImageIO can decode
 //  DNG, and most camera formats on recent iOS, but support varies by format
@@ -29,7 +18,6 @@ import CoreImage
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
-import Accelerate
 
 /// A decoded frame, in the engine's input space.
 struct DecodedFrame {
@@ -83,14 +71,36 @@ enum ImageDecoder {
     /// Export at the source resolution; only the interactive preview shrinks.
     static let exportLongEdge: Int? = nil
 
-    /// The colour space the pixel conversion below assumes. Core Image RAW
-    /// rendering is allowed to choose a wide-gamut output (for example Display
-    /// P3) unless the caller pins it. `CIRAWFilter.outputImage` does not
-    /// document that choice, and Core Graphics does not convert it later when
-    /// the CGImage reports a different space. Rendering into sRGB here makes
-    /// the iOS input match the explicit sRGB → linear ProPhoto conversion.
-    private static let sRGBSpace = CGColorSpace(name: CGColorSpace.sRGB)
-        ?? CGColorSpaceCreateDeviceRGB()
+    /// The exact float working space used by the Mac 1.3.5 decoder.
+    private static let linearProPhoto: CGColorSpace? = {
+        let d50: [CGFloat] = [0.9642, 1.0000, 0.8249]
+        let black: [CGFloat] = [0, 0, 0]
+        let gamma: [CGFloat] = [1, 1, 1]
+        let primaries: [CGFloat] = [
+            0.7976749, 0.2880402, 0.0000000,
+            0.1351917, 0.7118741, 0.0000000,
+            0.0313534, 0.0000857, 0.8252100,
+        ]
+        return d50.withUnsafeBufferPointer { wp in
+            black.withUnsafeBufferPointer { bp in
+                gamma.withUnsafeBufferPointer { gp in
+                    primaries.withUnsafeBufferPointer { matrix in
+                        CGColorSpace(calibratedRGBWhitePoint: wp.baseAddress!,
+                                     blackPoint: bp.baseAddress,
+                                     gamma: gp.baseAddress!,
+                                     matrix: matrix.baseAddress)
+                    }
+                }
+            }
+        }
+    }()
+
+    private static let context = CIContext(options: [
+        .workingColorSpace: CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3) as Any,
+        .workingFormat: CIFormat.RGBAh,
+        .cacheIntermediates: false,
+        .highQualityDownsample: true,
+    ])
 
     /// Decode an image from data.
     ///
@@ -118,31 +128,25 @@ enum ImageDecoder {
             guard let raw = CIRAWFilter(imageURL: temporaryURL) else {
                 throw DecodeError.unsupportedFormat(typeHint?.identifier ?? "camera RAW")
             }
-            // The intermediate CGImage is the other big allocation; releasing
-            // it before the float conversion keeps the peak lower.
-            let rendered = autoreleasepool { () -> CGImage? in
-                guard var output = raw.outputImage else { return nil }
-                if let maxLongEdge {
-                    let extent = output.extent
-                    let current = max(extent.width, extent.height)
-                    if current > CGFloat(maxLongEdge), current.isFinite {
-                        let factor = CGFloat(maxLongEdge) / current
-                        output = output.transformed(by: CGAffineTransform(scaleX: factor,
-                                                                          y: factor))
-                    }
-                }
-                let context = CIContext(options: [.workingColorSpace: NSNull()])
-                return context.createCGImage(output,
-                                             from: output.extent,
-                                             format: .RGBA8,
-                                             colorSpace: sRGBSpace)
+            // Match Mac 1.3.5's linear RAW look. These setters are only used
+            // after ImageIO has positively identified a camera RAW container;
+            // ordinary JPEGs never construct a CIRAWFilter.
+            if raw.isLensCorrectionSupported { raw.isLensCorrectionEnabled = false }
+            raw.isDraftModeEnabled = false
+            raw.boostAmount = 0
+            raw.boostShadowAmount = 0
+            raw.isGamutMappingEnabled = false
+            raw.localToneMapAmount = 0
+            raw.extendedDynamicRangeAmount = 0
+            guard let output = raw.outputImage else {
+                throw DecodeError.unreadable("the RAW decoder produced no image")
             }
-            if let rendered {
-                return try decode(cgImage: rendered, maxLongEdge: nil)
-            }
-            throw DecodeError.unreadable("the RAW decoder produced no image")
+            return try pixels(from: output, maxLongEdge: maxLongEdge)
         }
-        return try decode(source: source, maxLongEdge: maxLongEdge)
+        guard let image = CIImage(data: data, options: [.applyOrientationProperty: true]) else {
+            throw DecodeError.unreadable("Core Image could not decode this image")
+        }
+        return try pixels(from: image, maxLongEdge: maxLongEdge)
     }
 
     /// ImageIO's declared container type is the gate for camera RAW handling.
@@ -175,16 +179,58 @@ enum ImageDecoder {
             }
             throw DecodeError.emptyImage
         }
-        return try pixels(from: image)
+        return try pixels(from: CIImage(cgImage: image), maxLongEdge: nil)
     }
 
     /// Decode from a `CGImage`.
     static func decode(cgImage: CGImage, maxLongEdge: Int?) throws -> DecodedFrame {
-        let scaled = maxLongEdge.map { scale(image: cgImage, longEdge: $0) } ?? cgImage
-        return try pixels(from: scaled)
+        try pixels(from: CIImage(cgImage: cgImage), maxLongEdge: maxLongEdge)
     }
 
     // MARK: - the decode itself
+
+    /// Core Image performs the complete source-profile conversion directly
+    /// into float32 linear ProPhoto, matching Mac 1.3.5 without an 8-bit sRGB
+    /// intermediate or a hand-written colour matrix.
+    private static func pixels(from source: CIImage, maxLongEdge: Int?) throws -> DecodedFrame {
+        guard let colorSpace = linearProPhoto else {
+            throw DecodeError.unreadable("linear ProPhoto RGB is unavailable")
+        }
+        var image = source
+        let sourceExtent = image.extent
+        guard !sourceExtent.isInfinite, !sourceExtent.isEmpty else {
+            throw DecodeError.emptyImage
+        }
+        if let maxLongEdge {
+            let current = max(sourceExtent.width, sourceExtent.height)
+            if current > CGFloat(maxLongEdge), current.isFinite {
+                let factor = CGFloat(maxLongEdge) / current
+                image = image.transformed(by: CGAffineTransform(scaleX: factor, y: factor))
+            }
+        }
+        let extent = image.extent.integral
+        let width = Int(extent.width), height = Int(extent.height)
+        guard width > 0, height > 0 else { throw DecodeError.emptyImage }
+        guard width * height <= maxPixels else {
+            throw DecodeError.outOfMemory(pixels: width * height)
+        }
+        let placed = image.transformed(by: CGAffineTransform(translationX: -extent.origin.x,
+                                                              y: -extent.origin.y))
+        var rgba = [Float](repeating: 0, count: width * height * 4)
+        rgba.withUnsafeMutableBytes { bytes in
+            guard let base = bytes.baseAddress else { return }
+            context.render(placed, toBitmap: base, rowBytes: width * 16,
+                           bounds: CGRect(x: 0, y: 0, width: width, height: height),
+                           format: .RGBAf, colorSpace: colorSpace)
+        }
+        var rgb = [Float](repeating: 0, count: width * height * 3)
+        for pixel in 0..<(width * height) {
+            rgb[pixel * 3] = rgba[pixel * 4]
+            rgb[pixel * 3 + 1] = rgba[pixel * 4 + 1]
+            rgb[pixel * 3 + 2] = rgba[pixel * 4 + 2]
+        }
+        return DecodedFrame(pixels: rgb, width: width, height: height)
+    }
 
     private static func decodeImage(source: CGImageSource, maxLongEdge: Int?) -> CGImage? {
         if let maxLongEdge {
@@ -210,180 +256,4 @@ enum ImageDecoder {
         return CGImageSourceCreateImageAtIndex(source, 0, options as CFDictionary)
     }
 
-    /// Scale an image so its long edge is at most `longEdge`.
-    private static func scale(image: CGImage, longEdge: Int) -> CGImage {
-        let w = image.width, h = image.height
-        let current = max(w, h)
-        guard current > longEdge, current > 0 else { return image }
-        let factor = Double(longEdge) / Double(current)
-        let newW = max(1, Int((Double(w) * factor).rounded()))
-        let newH = max(1, Int((Double(h) * factor).rounded()))
-        let colorSpace = sRGBSpace
-        guard let context = CGContext(data: nil, width: newW, height: newH,
-                                      bitsPerComponent: 8, bytesPerRow: 0,
-                                      space: colorSpace,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-            return image
-        }
-        context.interpolationQuality = .high
-        context.draw(image, in: CGRect(x: 0, y: 0, width: newW, height: newH))
-        return context.makeImage() ?? image
-    }
-
-    /// The `CGImage` → the engine's pixels: 8-bit sRGB in, linear ProPhoto
-    /// float32 out.
-    ///
-    /// Two steps, and the order matters:
-    ///
-    /// 1. **sRGB → linear.** The sRGB transfer function, applied per channel.
-    ///    This is the decode of the *gamma*, not of any camera profile: the
-    ///    pixels are in a display encoding and the engine wants radiometric
-    ///    values.
-    /// 2. **Linear sRGB → linear ProPhoto.** A 3×3 matrix, applied to the
-    ///    now-linear values.
-    ///
-    /// vImage does step 1 over the whole frame at once; step 2 is a small
-    /// matrix and is done by hand, channel by channel, because folding it
-    /// into vImage's format juggling costs more than it saves.
-    ///
-    /// The matrix is the standard sRGB → ProPhoto RGB conversion, computed
-    /// for D50 (both spaces are D50-referred) and normalised so that white
-    /// maps to white.
-    private static func pixels(from image: CGImage) throws -> DecodedFrame {
-        let width = image.width
-        let height = image.height
-        guard width > 0, height > 0 else { throw DecodeError.emptyImage }
-        guard width * height <= maxPixels else {
-            throw DecodeError.outOfMemory(pixels: width * height)
-        }
-
-        // Draw into a known 8-bit RGBA buffer.
-        var buffer = [UInt8](repeating: 0, count: width * height * 4)
-        let colorSpace = sRGBSpace
-        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
-        let drawn: CGImage? = buffer.withUnsafeMutableBytes { raw -> CGImage? in
-            guard let base = raw.baseAddress,
-                  let context = CGContext(data: base, width: width, height: height,
-                                          bitsPerComponent: 8, bytesPerRow: width * 4,
-                                          space: colorSpace, bitmapInfo: bitmapInfo) else {
-                return nil
-            }
-            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-            return context.makeImage()
-        }
-        // `context.makeImage()` may be nil for a decode ImageIO could not turn
-        // into a drawable; the buffer itself is still valid, so carry on with
-        // it rather than failing the whole import.
-        _ = drawn
-
-        let count = width * height
-        var out = [Float](repeating: 0, count: count * 3)
-
-        // Step 1: sRGB → linear, in place on a copy of the 8-bit data.
-        var linear = [Float](repeating: 0, count: count * 4)
-        buffer.withUnsafeBytes { raw in
-            let src = raw.bindMemory(to: UInt8.self)
-            linear.withUnsafeMutableBufferPointer { dst in
-                for i in 0..<count {
-                    dst[i * 4 + 0] = srgbToLinear(Float(src[i * 4 + 0]) / 255)
-                    dst[i * 4 + 1] = srgbToLinear(Float(src[i * 4 + 1]) / 255)
-                    dst[i * 4 + 2] = srgbToLinear(Float(src[i * 4 + 2]) / 255)
-                    dst[i * 4 + 3] = 1
-                }
-            }
-        }
-
-        // Step 2: linear sRGB → linear ProPhoto.
-        let m = srgbToProPhotoLinear
-        linear.withUnsafeBufferPointer { src in
-            out.withUnsafeMutableBufferPointer { dst in
-                for i in 0..<count {
-                    let r = src[i * 4 + 0], g = src[i * 4 + 1], b = src[i * 4 + 2]
-                    dst[i * 3 + 0] = m[0] * r + m[1] * g + m[2] * b
-                    dst[i * 3 + 1] = m[3] * r + m[4] * g + m[5] * b
-                    dst[i * 3 + 2] = m[6] * r + m[7] * g + m[8] * b
-                }
-            }
-        }
-
-        return DecodedFrame(pixels: out, width: width, height: height)
-    }
-
-    /// The sRGB electro-optical transfer function, inverted.
-    ///
-    /// The linear segment matters: below 0.04045 the sRGB curve is linear,
-    /// and a naive `pow(x, 2.2)` lifts the blacks and washes out the shadows —
-    /// which, in a film simulator, shows up as milky blacks in the print.
-    @inline(__always)
-    static func srgbToLinear(_ c: Float) -> Float {
-        if c <= 0.04045 {
-            return c / 12.92
-        }
-        return powf((c + 0.055) / 1.055, 2.4)
-    }
-
-    /// Linear sRGB → sRGB-encoded 8-bit.
-    @inline(__always)
-    static func linearToSrgb(_ c: Float) -> UInt8 {
-        let x = min(max(c, 0), 1)
-        let v: Float = (x <= 0.0031308) ? x * 12.92 : 1.055 * powf(x, 1.0 / 2.4) - 0.055
-        return UInt8(clamping: Int((v * 255).rounded()))
-    }
-
-    // MARK: - the engine's own transfer functions
-    //
-    // The engine works in ProPhoto RGB, and **ProPhoto's transfer function is
-    // not the sRGB one**. `core/colour.cpp`'s `cctf_mode_for` gives ProPhoto
-    // mode 1, and `shaders/nodes.metal`'s mode 1 is:
-    //
-    //     decode: (v < 16/512) ? v/16 : pow(v, 1.8)
-    //     encode: (v < 1/512)  ? v*16 : pow(v, 1/1.8)
-    //
-    // A gamma of 1.8 with a 16x linear toe -- not sRGB's 2.4 with a 12.92
-    // slope. So the engine's *output* texture is ProPhoto-encoded, and
-    // reading it back means undoing **this** curve, not the sRGB one. The
-    // two are close enough that using the wrong one looks almost right --
-    // which is exactly why it has to be the right one.
-    //
-    // These are the engine's numbers, transcribed. If the engine's modes
-    // ever change, these change with them.
-
-    /// The engine's mode 1 (ProPhoto RGB) decode.
-    @inline(__always)
-    static func proPhotoToLinear(_ c: Float) -> Float {
-        if c < 16.0 * (1.0 / 512.0) {
-            return c / 16.0
-        }
-        return powf(max(c, 0), 1.8)
-    }
-
-    /// The engine's mode 1 (ProPhoto RGB) encode.
-    @inline(__always)
-    static func linearToProPhoto(_ c: Float) -> Float {
-        let v = max(c, 0)
-        if v < 1.0 / 512.0 {
-            return v * 16.0
-        }
-        return powf(v, 1.0 / 1.8)
-    }
-
-    /// Linear sRGB → linear ProPhoto RGB, as a 3×3 matrix in row-major order.
-    ///
-    /// Both spaces are D50-referred, so this is a chromatic adaptation already
-    /// applied — no separate Bradford step. The matrix is the published
-    /// sRGB → ProPhoto RGB conversion, rounded to float32; its error against
-    /// the double-precision original is below 1e-6, far under the float32
-    /// noise floor of the engine's own pipeline.
-    static let srgbToProPhotoLinear: [Float] = [
-         0.7977666,  0.1351813,  0.0313477,
-         0.2880748,  0.7118352,  0.0000899,
-         0.0000000,  0.0000000,  0.8252100,
-    ]
-
-    /// Linear ProPhoto RGB → linear sRGB, for the export path.
-    static let proPhotoToSRGBLinear: [Float] = [
-         1.3457873, -0.2555801, -0.0511018,
-        -0.5446307,  1.5081677,  0.0205216,
-         0.0000000,  0.0000000,  1.2119675,
-    ]
 }

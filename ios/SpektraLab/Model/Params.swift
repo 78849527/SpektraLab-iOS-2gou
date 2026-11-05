@@ -117,10 +117,10 @@ struct ParamControl: Identifiable, Sendable {
 enum ParamCatalog {
     static let all: [ParamControl] = [
         ParamControl(.exposureCompensation, title: "曝光补偿", range: -3...3, defaultValue: 0),
-        ParamControl(.grainAmount, title: "颗粒", range: 0...1, defaultValue: 0.35),
-        ParamControl(.halationAmount, title: "光晕", range: 0...1, defaultValue: 0.25),
-        ParamControl(.glareAmount, title: "眩光", range: 0...1, defaultValue: 0.15),
-        ParamControl(.densityCurveGamma, title: "密度曲线", range: 0.2...0.8, defaultValue: 0.45),
+        ParamControl(.grainAmount, title: "颗粒", range: 0...1, defaultValue: 1),
+        ParamControl(.halationAmount, title: "光晕", range: 0...1, defaultValue: 1),
+        ParamControl(.glareAmount, title: "眩光", range: 0...1, defaultValue: 1),
+        ParamControl(.densityCurveGamma, title: "密度曲线", range: 0.2...1.5, defaultValue: 1),
         ParamControl(.mFilterShift, title: "滤色包 M", range: -1...1, defaultValue: 0),
         ParamControl(.yFilterShift, title: "滤色包 Y", range: -1...1, defaultValue: 0),
     ]
@@ -142,9 +142,17 @@ enum ParamDefaults {
             FilmParam.filmStock.key: .string(film),
             FilmParam.printStock.key: .string(paper),
             FilmParam.autoExposure.key: .bool(true),
+            "auto_exposure_method": .string("balanced"),
+            "film_format_mm": .number(36),
             FilmParam.grainActive.key: .bool(true),
+            "grain_sublayers_active": .bool(true),
             FilmParam.halationActive.key: .bool(true),
+            "halation_scatter_amount": .number(1),
+            "halation_headroom_ev": .number(4),
+            "dir_couplers_active": .bool(true),
+            "dir_couplers_amount": .number(1),
             FilmParam.glareActive.key: .bool(true),
+            "filter_shift_scale": .number(40),
         ]
         for control in ParamCatalog.all {
             delta[control.key] = .number(control.defaultValue)
