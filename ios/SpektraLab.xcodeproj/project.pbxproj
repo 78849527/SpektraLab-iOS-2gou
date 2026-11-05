@@ -239,13 +239,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		B663863AD126A4768BAE9A7F /* Assets.xcassets */ = {isa = PBXBuildFile; fileRef = 89E16FC080E6CEAED03F1090; };
-		B7718ABD0022334455667788 /* Resources */ = {isa = PBXBuildFile; fileRef = DB4A69182F62F25C0AEBC961; };
+		BCE0E263206CC549F761CF84 /* Resources */ = {isa = PBXBuildFile; fileRef = DB4A69182F62F25C0AEBC961; };
 		C831EECBAB01524E02C71B42 /* app-resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B7718ABD0022334455667788 /* Resources */,
-				B663863AD126A4768BAE9A7F /* Assets.xcassets */
+				B663863AD126A4768BAE9A7F /* Assets.xcassets */,
+				BCE0E263206CC549F761CF84 /* Resources */
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -271,19 +271,19 @@
 			shellPath = /bin/sh;
 			shellScript = "\"$SRCROOT/Tools/check-engine-resources.sh\"\n";
 		};
-		E3B433188A79901C6FBE1B60 /* Sign Metal library */ = {
+		89A256B2EC36C5BA54DF5527 /* Sign compiled resources */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			inputPaths = (
 			);
-			name = "Sign Metal library";
+			name = "Sign compiled resources";
 			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "app=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nif [ -n \"$EXPANDED_CODE_SIGN_IDENTITY\" ]; then\n	find \"$app\" -type f -print0 | while IFS= read -r -d \"\0\" code; do\n		/usr/bin/codesign --force --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" --timestamp=none \"$code\"\n	done\nfi\n";
+			shellScript = "app=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\nif [ -n \"$EXPANDED_CODE_SIGN_IDENTITY\" ]; then\n	for resource in \"$app\"/*.metallib \"$app\"/Assets.car \"$app\"/*.png \"$app\"/Resources/engine-assets.bin; do\n		if [ -f \"$resource\" ]; then\n			/usr/bin/codesign --force --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" --timestamp=none \"$resource\"\n		fi\n	done\nfi\n";
 		};
 		967DE5DAE8F9C3546488D3FD /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -403,7 +403,7 @@
 				AB6F1305312B9996E2538FF8,
 				AA9A663971E63899B42E7E70,
 				C831EECBAB01524E02C71B42,
-				E3B433188A79901C6FBE1B60
+				89A256B2EC36C5BA54DF5527
 			);
 			buildRules = (
 			);

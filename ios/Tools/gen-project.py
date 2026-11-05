@@ -354,25 +354,29 @@ def build() -> str:
           '\n\t\t\tshellScript = "\\"$SRCROOT/Tools/check-engine-resources.sh\\"\\n";'
           '\n\t\t}', "Check engine resources")
 
-    # Xcode 27 emits the app's canvas shader as `default.metallib`. It is a
-    # code object, but the normal app signing pass does not recurse into this
-    # generic Metal library. Sign it after resources are copied and before
-    # Xcode signs the enclosing .app.
-    sign_metal_script = uid("phase:app:sign-metal-library")
-    p.add(sign_metal_script,
+    # Xcode 27 treats compiled Metal and asset payloads as signable nested
+    # objects. Sign only those resources before the normal enclosing-app
+    # signature. Signing the executable or Info.plist here breaks the final
+    # bundle signature and makes Simulator report a missing bundle ID.
+    sign_resources_script = uid("phase:app:sign-compiled-resources")
+    p.add(sign_resources_script,
           '{\n\t\t\tisa = PBXShellScriptBuildPhase;\n'
           '\t\t\tbuildActionMask = 2147483647;\n'
           '\t\t\tfiles = (\n\t\t\t);\n\t\t\tinputPaths = (\n\t\t\t);\n'
-          '\t\t\tname = "Sign Metal library";\n\t\t\toutputPaths = (\n\t\t\t);\n'
+          '\t\t\tname = "Sign compiled resources";\n\t\t\toutputPaths = (\n\t\t\t);\n'
           '\t\t\trunOnlyForDeploymentPostprocessing = 0;\n'
           '\t\t\tshellPath = /bin/sh;\n'
           '\t\t\tshellScript = "app=\\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\\"\\n'
           'if [ -n \\"$EXPANDED_CODE_SIGN_IDENTITY\\" ]; then\\n'
-          '\tfind \\"$app\\" -type f -print0 | while IFS= read -r -d \\"\\0\\" code; do\\n'
-          '\t\t/usr/bin/codesign --force --sign \\"$EXPANDED_CODE_SIGN_IDENTITY\\" --timestamp=none \\"$code\\"\\n'
+          '\tfor resource in \\"$app\\"/*.metallib \\"$app\\"/Assets.car '
+          '\\"$app\\"/*.png \\"$app\\"/Resources/engine-assets.bin; do\\n'
+          '\t\tif [ -f \\"$resource\\" ]; then\\n'
+          '\t\t\t/usr/bin/codesign --force --sign \\"$EXPANDED_CODE_SIGN_IDENTITY\\" '
+          '--timestamp=none \\"$resource\\"\\n'
+          '\t\tfi\\n'
           '\tdone\\n'
           'fi\\n";\n'
-          '\t\t}', "Sign Metal library")
+          '\t\t}', "Sign compiled resources")
 
     app_target = uid("target:app")
     project = uid("project")
@@ -380,7 +384,8 @@ def build() -> str:
           f'{{\n\t\t\tisa = PBXNativeTarget;\n'
           f'\t\t\tbuildConfigurationList = {cfg_list("app", app_cfg)};\n'
           f'\t\t\tbuildPhases = (\n\t\t\t\t{check_script},\n\t\t\t\t{app_sources},\n'
-          f'\t\t\t\t{app_frameworks},\n\t\t\t\t{app_resources},\n\t\t\t\t{sign_metal_script}\n\t\t\t);\n'
+          f'\t\t\t\t{app_frameworks},\n\t\t\t\t{app_resources},\n'
+          f'\t\t\t\t{sign_resources_script}\n\t\t\t);\n'
           f'\t\t\tbuildRules = (\n\t\t\t);\n\t\t\tdependencies = (\n\t\t\t);\n'
           f'\t\t\tname = {APP};\n\t\t\tproductName = {APP};\n'
           f'\t\t\tproductReference = {app_product};\n'
