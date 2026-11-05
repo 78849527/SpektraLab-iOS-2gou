@@ -52,7 +52,10 @@ concurrency:
   cancel-in-progress: true
 jobs:
   ipa:
-    runs-on: macos-15
+    # The app targets iOS 27 and uses the iOS 27 SDK's Swift concurrency
+    # annotations. macos-15 currently defaults to Xcode 16.4 / iOS 18.5,
+    # which cannot compile this target even when the source builds locally.
+    runs-on: xcode-27
     timeout-minutes: 45
     # The rolling release at the end of the job is written with the workflow's
     # own token, and `contents: write` is what lets it create one; a
@@ -78,6 +81,12 @@ jobs:
       HAVE_PROFILE_NAME: ${{ secrets.IOS_PROVISIONING_PROFILE_NAME != '' }}
     steps:
       - uses: actions/checkout@v4
+      - name: Select Xcode 27.2
+        run: |
+          set -euo pipefail
+          sudo xcode-select -s /Applications/Xcode_27.2_Release_Candidate.app/Contents/Developer
+          xcodebuild -version
+          test "$(xcrun -sdk iphoneos --show-sdk-version)" = "27.2"
       # The engine is upstream's, and it is not in this repository: this one
       # carries the app, the patch and the build scripts, and the engine comes
       # from the upstream project at a pinned commit.
