@@ -54,6 +54,37 @@ fi
 echo "==> the Xcode project"
 python3 ios/Tools/gen-project.py
 
+if [ "$unsigned" -eq 1 ]; then
+  echo "==> the unsigned device build"
+  mkdir -p build/ipa
+  xcodebuild -project ios/SpektraLab.xcodeproj \
+    -scheme SpektraLab \
+    -configuration Release \
+    -derivedDataPath build/DerivedData \
+    -destination "generic/platform=iOS" \
+    CODE_SIGNING_ALLOWED=NO \
+    clean build 2>&1 | tee build/xcodebuild.log
+
+  app="build/DerivedData/Build/Products/Release-iphoneos/SpektraLab.app"
+  if [ ! -f "$app/Info.plist" ] || [ ! -x "$app/SpektraLab" ]; then
+    echo "error: the device app bundle is incomplete: $app" >&2
+    exit 1
+  fi
+
+  stage="build/unsigned-stage"
+  rm -rf "$stage"
+  mkdir -p "$stage/Payload"
+  ditto --norsrc --noextattr --noqtn --noacl "$app" "$stage/Payload/SpektraLab.app"
+  staged_app="$stage/Payload/SpektraLab.app"
+  executable="$(plutil -extract CFBundleExecutable raw - < "$staged_app/Info.plist")"
+  find "$staged_app" -type f -exec chmod a-x {} +
+  chmod a+x "$staged_app/$executable"
+
+  python3 ios/Tools/repack-ipa.py "$stage" build/ipa/SpektraLab-unsigned.ipa
+  echo "==> done (unsigned): build/ipa/SpektraLab-unsigned.ipa"
+  exit 0
+fi
+
 echo "==> the archive"
 mkdir -p build
 set -o pipefail
@@ -64,11 +95,6 @@ xcodebuild -project ios/SpektraLab.xcodeproj \
   -destination "generic/platform=iOS" \
   -archivePath build/SpektraLab.xcarchive \
   archive 2>&1 | tee build/xcodebuild.log
-
-if [ "$unsigned" -eq 1 ]; then
-  echo "==> done (unsigned). The archive is at build/SpektraLab.xcarchive"
-  exit 0
-fi
 
 echo "==> the IPA"
 mkdir -p build/ipa
