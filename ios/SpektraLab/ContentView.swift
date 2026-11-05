@@ -145,6 +145,10 @@ struct ContentView: View {
             if let gate = environment["SPEKTRAFILM_UI_TEST_GATE"], !gate.isEmpty {
                 model.setOverscanFormat(gate)
             }
+            if let orientation = environment["SPEKTRAFILM_UI_TEST_ORIENTATION"],
+               let requested = FilmStripOrientation(rawValue: orientation) {
+                model.setStripOrientation(requested)
+            }
             if environment["SPEKTRAFILM_UI_TEST_BORDER"] == "1" {
                 model.setFilmBorderEnabled(true)
                 try? await Task.sleep(for: .seconds(8))
@@ -280,6 +284,10 @@ struct ContentView: View {
                                 if model.filmBorderEnabled {
                                     Text("·")
                                     Text(model.selectedGate.title)
+                                    if model.stripOrientation != .automatic {
+                                        Text("·")
+                                        Text(model.stripOrientation.title)
+                                    }
                                 }
                             }
                             .font(.system(size: 8, weight: .medium, design: .rounded))
@@ -506,7 +514,7 @@ struct ContentView: View {
     private var effectControls: some View {
         HStack(spacing: 7) {
             effectButton(title: "片边",
-                         detail: model.filmBorderEnabled ? model.gateDisplayName : "关闭",
+                         detail: model.filmEdgeDisplayName,
                          symbol: "film",
                          active: model.filmBorderEnabled) {
                 model.setFilmBorderEnabled(!model.filmBorderEnabled)
@@ -984,9 +992,26 @@ struct FilmEffectsSheet: View {
                 }
             }
 
+            Text("片边方向")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .padding(.top, 2)
+
+            Picker("片边方向", selection: Binding(
+                get: { model.stripOrientation },
+                set: { model.setStripOrientation($0) })) {
+                ForEach(FilmStripOrientation.allCases) { orientation in
+                    Text(orientation.title).tag(orientation)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(!model.stripOrientationAvailable)
+
             HStack(spacing: 6) {
-                Image(systemName: "crop")
-                Text("当前 \(model.gateDisplayName)；为避免拉伸，画面会以中心裁切到片幅比例。")
+                Image(systemName: model.selectedGate.isSquare ? "square" : "rectangle.split.2x1")
+                Text(model.selectedGate.isSquare
+                     ? "方形片幅没有横竖之分；画面会以中心裁切到 1:1。"
+                     : "当前 \(model.gateDisplayName) · \(model.stripOrientation.detail)。为避免拉伸，画面会中心裁切到对应方向的片条，预览与导出使用同一构图。")
             }
             .font(.caption2)
             .foregroundStyle(.secondary)

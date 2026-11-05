@@ -19,6 +19,52 @@ struct FilmGate: Identifiable, Hashable, Sendable {
 
     /// Long edge over short edge. The engine accepts either orientation.
     var aspect: CGFloat { CGFloat(longEdgeMM / shortEdgeMM) }
+
+    /// A square gate has no horizontal or vertical strip to choose.
+    var isSquare: Bool { abs(longEdgeMM - shortEdgeMM) < 0.01 }
+}
+
+/// Which way the film runs through the gate.
+///
+/// This is not a border rotation drawn by SwiftUI. The frame handed to the
+/// engine has to have the chosen orientation, so the crop, the preview and the
+/// full-resolution export all use the same fitted aspect. The engine then lays
+/// the perforations, rebate and edge print along that physical strip.
+enum FilmStripOrientation: String, CaseIterable, Identifiable, Sendable {
+    case automatic
+    case horizontal
+    case vertical
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic: "自动"
+        case .horizontal: "横向"
+        case .vertical: "竖向"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .automatic: "跟随照片"
+        case .horizontal: "横向片条"
+        case .vertical: "竖向片条"
+        }
+    }
+
+    /// The crop's aspect in image orientation, long edge over short edge for
+    /// a landscape frame and its reciprocal for a portrait one.
+    func targetAspect(for gate: FilmGate, sourceAspect: CGFloat) -> CGFloat {
+        switch self {
+        case .automatic:
+            return sourceAspect >= 1 ? gate.aspect : 1 / gate.aspect
+        case .horizontal:
+            return gate.aspect
+        case .vertical:
+            return 1 / gate.aspect
+        }
+    }
 }
 
 enum FilmGateCatalog {
@@ -53,15 +99,34 @@ enum FilmGateCatalog {
         gates.first { $0.id == id }
     }
 
-    /// The automatic choice: the measured gate closest to the photograph's
-    /// long/short ratio. Panoramic gates are included, so an XPan crop stays
-    /// an XPan crop instead of being forced back to 3:2.
+    /// The automatic choice. A photograph's aspect alone cannot tell 35 mm
+    /// from a 120 frame with the same shape, so ordinary 3:2, 4:3 and 5:4
+    /// photographs use 35 mm. Only shapes that identify themselves are
+    /// matched automatically: a square frame and the panoramic gates.
     static func resolve(selection: String, imageAspect: CGFloat?) -> FilmGate {
         if let explicit = gate(id: selection) { return explicit }
-        let source = max(imageAspect ?? (3.0 / 2.0), 1.0)
-        return gates.min {
+        // A portrait photograph is still compared by its long/short ratio.
+        // Clamping the raw width/height to 1 made every portrait look square
+        // and sent the automatic choice to 6x6, with a strip direction that
+        // had nothing to do with the photograph's shape.
+        let raw = imageAspect ?? (3.0 / 2.0)
+        let source = raw.isFinite && raw > 0
+            ? max(raw, 1 / raw)
+            : 3.0 / 2.0
+        let standard135 = gate(id: "135") ?? gates[0]
+        let square = gate(id: "120_6x6") ?? standard135
+        if abs(log(Double(source / square.aspect))) < 0.02 {
+            return square
+        }
+
+        let panoramas = gates.filter { $0.aspect >= 1.9 }
+        if let panoramic = panoramas.min(by: {
             abs(log(Double(source / $0.aspect))) < abs(log(Double(source / $1.aspect)))
-        } ?? gates[0]
+        }), abs(log(Double(source / panoramic.aspect))) < 0.06 {
+            return panoramic
+        }
+
+        return standard135
     }
 }
 

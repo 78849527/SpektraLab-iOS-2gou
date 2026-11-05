@@ -20,12 +20,14 @@ extern "C" {
 /// the last read; the pointer returned by `SPKLibRawFramePixels` is borrowed.
 typedef void *SPKLibRawFrameRef;
 
-/// `aspect` is long edge over short edge; 0 leaves the frame uncropped. The
-/// crop preserves the frame's orientation (portrait uses the reciprocal).
+/// `aspect` is long edge over short edge and preserves the frame's own
+/// orientation; `targetAspect` is an exact width/height crop and overrides it.
+/// Either can be 0 to leave that crop unset; both 0 leaves the frame uncropped.
 SPKLibRawFrameRef _Nullable SPKLibRawDecode(NSData *data,
                                             NSString * _Nullable filenameExtension,
                                             NSInteger maxLongEdge,
                                             double aspect,
+                                            double targetAspect,
                                             NSInteger *width,
                                             NSInteger *height);
 

@@ -5,7 +5,7 @@
 
 ## 一句话现状
 
-> 2026-11-05 最新状态（v1.1.0，发布中）：
+> 2026-11-05 最新状态（v1.1.1，发布中）：
 >
 > - 开发目标仍是 iOS 27.0 / Xcode 27.2。
 > - 界面已重做：顶部实时显示胶片/相纸，预览自适应，单指点按进入沉浸模式，
@@ -14,6 +14,10 @@
 >   日期和 120 拍摄数据都与画面一起显影，不是 SwiftUI 叠层。
 > - 片边裁切已修正竖图方向：横图使用片幅长/短比，竖图使用其倒数；Core Image、
 >   LibRaw 回退和全尺寸导出使用同一规则。
+> - 片边方向可选手动“横向 / 竖向”：会按目标方向重新中心裁切，画面保持正向，
+>   齿孔、片基、片边字、格号和日期随真实片条方向生成。自动片幅已修正竖图被误判
+>   为 1:1（进而落到 6×6）的问题；普通 3:2 / 4:3 自动使用 135，不再误落到
+>   6×9 或半格。
 > - RAW 类型提示已修正：iOS 把 ARW/NEF 报成 `public.tiff`，现在优先使用扩展名对应的
 >   真实 RAW UTI；Core Image 现在能对 Sony ARW 返回 6192×4128 全尺寸画面。
 > - Core Image 返回空图或内嵌缩略图（Nikon NEF 在 iOS 27 会返回 120×160）时，
@@ -26,7 +30,7 @@
 > - 全尺寸片边导出已验证：135 + 日期为 `6446×5946`，120/645 + 日期为 `5658×4188`。
 >   输出 JPEG 中齿孔、片边字、格号、日期与拍摄数据均完整。
 > - 仍未在目标真机上复测相册写入、长时间内存和胶片切换。
-> - 真机无签名包已按 `repack-ipa.py` 生成，版本为 `1.1.0 (2)`；CI 成功后会替换
+> - 真机无签名包已按 `repack-ipa.py` 生成，版本为 `1.1.1 (3)`；CI 成功后会替换
 >   `latest` Release。
 >
 > Xcode 27 的 simulator Metal 编译必须显式传
@@ -61,8 +65,12 @@ SIMCTL_CHILD_SPEKTRAFILM_RENDER_TEST_PATH="$C/Documents/rawtest/photo.ARW" SIMCT
 ```bash
 SIMCTL_CHILD_SPEKTRAFILM_RENDER_TEST_BORDER=1 \
 SIMCTL_CHILD_SPEKTRAFILM_RENDER_TEST_GATE=135 \
+SIMCTL_CHILD_SPEKTRAFILM_RENDER_TEST_ORIENTATION=vertical \
 SIMCTL_CHILD_SPEKTRAFILM_RENDER_TEST_DATE=1
 ```
+
+`SPEKTRAFILM_RENDER_TEST_ORIENTATION` 可选 `automatic`、`horizontal`、`vertical`。
+UI 复测同名变量为 `SPEKTRAFILM_UI_TEST_ORIENTATION`。
 
 输出写到 `$C/Documents/render-test.jpg`；失败时写 `render-probe-error.txt`。
 

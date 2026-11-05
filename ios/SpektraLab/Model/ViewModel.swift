@@ -64,6 +64,7 @@ final class ViewModel: ObservableObject {
     /// border: the rebate, holes and edge print are developed on the negative.
     @Published private(set) var filmBorderEnabled = false
     @Published private(set) var overscanFormat = FilmGateCatalog.automaticID
+    @Published private(set) var stripOrientation: FilmStripOrientation = .automatic
 
     /// The camera's date back, printed through the film base.
     @Published private(set) var dateBackEnabled = false
@@ -92,11 +93,27 @@ final class ViewModel: ObservableObject {
         FilmGateCatalog.resolve(selection: overscanFormat, imageAspect: naturalAspect)
     }
 
+    /// The crop shape handed to the engine. The engine reads the strip's
+    /// direction from this shape, so changing it here changes the real
+    /// perforations and rebate, not just the SwiftUI frame.
+    var filmCropAspect: CGFloat {
+        stripOrientation.targetAspect(for: selectedGate, sourceAspect: naturalAspect)
+    }
+
     var gateDisplayName: String {
         overscanFormat == FilmGateCatalog.automaticID
             ? "自动 · \(selectedGate.title)"
             : selectedGate.title
     }
+
+    var filmEdgeDisplayName: String {
+        guard filmBorderEnabled else { return "关闭" }
+        return stripOrientation == .automatic
+            ? gateDisplayName
+            : "\(gateDisplayName) · \(stripOrientation.title)"
+    }
+
+    var stripOrientationAvailable: Bool { !selectedGate.isSquare }
 
     var dateBackAvailable: Bool { selectedGate.supportsDateBack }
 
@@ -123,6 +140,7 @@ final class ViewModel: ObservableObject {
             "profiles: \(catalog.films.count) films / \(catalog.slides.count) slides / \(catalog.papers.count) papers",
             "resources: \(root)",
             "engine: \(engine == nil ? "not started" : "ready")",
+            "film edge: \(filmBorderEnabled ? "on" : "off") · \(gateDisplayName) · \(stripOrientation.detail) · crop \(String(format: "%.4f", filmCropAspect))",
             "status: \(statusText)"
         ].joined(separator: "\n")
     }
@@ -278,7 +296,7 @@ final class ViewModel: ObservableObject {
                                               typeHint: typeHint)
         naturalAspect = CGFloat(decoded.width) / CGFloat(max(decoded.height, 1))
         let framed = filmBorderEnabled
-            ? decoded.centerCropped(toAspect: selectedGate.aspect)
+            ? decoded.centerCropped(toTargetAspect: filmCropAspect)
             : decoded
         try await loadFrame(framed)
         statusText = "已载入 \(decoded.width)×\(decoded.height) · \(String(format: "%.1f", decoded.megapixels)) MP"
@@ -394,10 +412,24 @@ final class ViewModel: ObservableObject {
     func setOverscanFormat(_ id: String) {
         guard id == FilmGateCatalog.automaticID || FilmGateCatalog.gate(id: id) != nil else { return }
         overscanFormat = id
+        if selectedGate.isSquare && stripOrientation != .automatic {
+            stripOrientation = .automatic
+        }
         if !selectedGate.supportsDateBack {
             dateBackEnabled = false
             dateBackPlacement = .frame
         }
+        if filmBorderEnabled { reloadPreviewForFilmEffect() }
+    }
+
+    /// Choose which way the strip runs. The frame is re-cropped to the chosen
+    /// orientation, so a horizontal choice on a portrait source selects a
+    /// horizontal slice of the photograph and the engine builds a horizontal
+    /// strip around it. It never rotates the picture or fakes the rebate.
+    func setStripOrientation(_ orientation: FilmStripOrientation) {
+        guard stripOrientation != orientation else { return }
+        guard !selectedGate.isSquare || orientation == .automatic else { return }
+        stripOrientation = orientation
         if filmBorderEnabled { reloadPreviewForFilmEffect() }
     }
 
@@ -467,7 +499,7 @@ final class ViewModel: ObservableObject {
                     self.dateBackPlacement = .frame
                 }
                 let framed = self.filmBorderEnabled
-                    ? decoded.centerCropped(toAspect: gate.aspect)
+                    ? decoded.centerCropped(toTargetAspect: self.filmCropAspect)
                     : decoded
                 try await self.loadFrame(framed)
             } catch {
@@ -616,14 +648,14 @@ final class ViewModel: ObservableObject {
         do {
             let data = originalData
             let hint = originalTypeHint
-            let cropAspect = filmBorderEnabled ? selectedGate.aspect : nil
+            let cropAspect = filmBorderEnabled ? filmCropAspect : nil
             // Decoding a RAW container is CPU-heavy. Do it off the main actor
             // so the export sheet keeps moving and the UI never freezes.
             let full = try await Task.detached(priority: .userInitiated) {
                 try ImageDecoder.decode(data: data,
                                         maxLongEdge: ImageDecoder.exportLongEdge,
                                         typeHint: hint,
-                                        aspect: cropAspect)
+                                        targetAspect: cropAspect)
             }.value
 
             let exportDelta = currentEngineDelta()

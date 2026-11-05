@@ -76,6 +76,15 @@ enum DecoderProbe {
         let filmBorder = environment["SPEKTRAFILM_RENDER_TEST_BORDER"] == "1"
         let gateID = environment["SPEKTRAFILM_RENDER_TEST_GATE"] ?? "135"
         let gate = FilmGateCatalog.gate(id: gateID) ?? FilmGateCatalog.gates[0]
+        let orientation = FilmStripOrientation(
+            rawValue: environment["SPEKTRAFILM_RENDER_TEST_ORIENTATION"] ?? "automatic"
+        ) ?? .automatic
+        let automaticAspect: CGFloat? = filmBorder && orientation == .automatic
+            ? gate.aspect
+            : nil
+        let targetAspect: CGFloat? = filmBorder && orientation != .automatic
+            ? (orientation == .vertical ? 1 / gate.aspect : gate.aspect)
+            : nil
         let dateBack = environment["SPEKTRAFILM_RENDER_TEST_DATE"] == "1"
             && gate.supportsDateBack
 
@@ -87,7 +96,8 @@ enum DecoderProbe {
                     data: data,
                     maxLongEdge: fullResolution ? nil : 2048,
                     typeHint: UTType(filenameExtension: source.pathExtension),
-                    aspect: filmBorder ? gate.aspect : nil
+                    aspect: automaticAspect,
+                    targetAspect: targetAspect
                 )
                 guard let device = MTLCreateSystemDefaultDevice() else {
                     throw EngineError.noDevice

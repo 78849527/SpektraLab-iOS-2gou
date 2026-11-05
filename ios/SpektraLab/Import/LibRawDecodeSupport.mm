@@ -23,10 +23,14 @@ const char *SPKLibRawLastError(void) {
 namespace {
 
 void center_crop(std::vector<float> &pixels, uint32_t &width, uint32_t &height,
-                 double aspect) {
-    if (aspect <= 0 || width <= 0 || height <= 0) return;
+                 double aspect, double targetAspect) {
+    if (width <= 0 || height <= 0) return;
+    if (targetAspect <= 0) {
+        if (aspect <= 0) return;
+        const double sourceAspect = double(width) / double(height);
+        targetAspect = sourceAspect >= 1.0 ? aspect : 1.0 / aspect;
+    }
     const double sourceAspect = double(width) / double(height);
-    const double targetAspect = sourceAspect >= 1.0 ? aspect : 1.0 / aspect;
     uint32_t cropWidth = width, cropHeight = height;
     if (sourceAspect > targetAspect) {
         cropWidth = std::max<uint32_t>(1, uint32_t(std::llround(height * targetAspect)));
@@ -97,6 +101,7 @@ SPKLibRawFrameRef SPKLibRawDecode(NSData *data,
                                   NSString *filenameExtension,
                                   NSInteger maxLongEdge,
                                   double aspect,
+                                  double targetAspect,
                                   NSInteger *width,
                                   NSInteger *height) {
     gLastError.clear();
@@ -129,7 +134,7 @@ SPKLibRawFrameRef SPKLibRawDecode(NSData *data,
         return nil;
     }
 
-    center_crop(decoded.rgb, decoded.width, decoded.height, aspect);
+    center_crop(decoded.rgb, decoded.width, decoded.height, aspect, targetAspect);
 
     std::vector<float> reduced = resample(decoded.rgb, decoded.width, decoded.height, maxLongEdge);
     const bool didResample = !reduced.empty();

@@ -122,6 +122,19 @@ struct DecodedFrame: @unchecked Sendable {
     /// no full-resolution second frame is allocated.
     func centerCropped(toAspect aspect: CGFloat) -> DecodedFrame {
         let crop = ImageDecoder.centerCrop(width: width, height: height, aspect: aspect)
+        return cropped(to: crop)
+    }
+
+    /// Crop to an exact image aspect, including which way up it is. Use this
+    /// when the film-strip direction is chosen explicitly: a 2:3 target stays
+    /// portrait even though the photograph is landscape.
+    func centerCropped(toTargetAspect targetAspect: CGFloat) -> DecodedFrame {
+        let crop = ImageDecoder.centerCrop(width: width, height: height,
+                                          targetAspect: targetAspect)
+        return cropped(to: crop)
+    }
+
+    private func cropped(to crop: (x: Int, y: Int, width: Int, height: Int)) -> DecodedFrame {
         guard crop.width != width || crop.height != height else { return self }
         var output = [Float](repeating: 0, count: crop.width * crop.height * 3)
         pixels.withUnsafeBufferPointer { source in
@@ -222,7 +235,7 @@ enum ImageDecoder {
     /// - Parameter maxLongEdge: the long edge to scale to, or `nil` for no
     ///   scaling (the export path).
     static func decode(data: Data, maxLongEdge: Int?, typeHint: UTType? = nil,
-                       aspect: CGFloat? = nil) throws -> DecodedFrame {
+                       aspect: CGFloat? = nil, targetAspect: CGFloat? = nil) throws -> DecodedFrame {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
             throw DecodeError.unreadable("not an image this system recognises")
         }
@@ -259,7 +272,8 @@ enum ImageDecoder {
                           Int(output.extent.width), Int(output.extent.height))
                 } else {
                     do {
-                        return try pixels(from: output, maxLongEdge: maxLongEdge, aspect: aspect)
+                        return try pixels(from: output, maxLongEdge: maxLongEdge,
+                                          aspect: aspect, targetAspect: targetAspect)
                     } catch {
                         NSLog("SpektraLab Core Image RAW path failed for %@: %@",
                               identifier ?? "unknown", error.localizedDescription)
@@ -281,6 +295,7 @@ enum ImageDecoder {
                 suffix,
                 maxLongEdge ?? 0,
                 aspect.map(Double.init) ?? 0,
+                targetAspect.map(Double.init) ?? 0,
                 &width,
                 &height
             ) else {
@@ -303,7 +318,8 @@ enum ImageDecoder {
         guard let image = CIImage(data: data, options: [.applyOrientationProperty: true]) else {
             throw DecodeError.unreadable("Core Image could not decode this image")
         }
-        return try pixels(from: image, maxLongEdge: maxLongEdge, aspect: aspect)
+        return try pixels(from: image, maxLongEdge: maxLongEdge,
+                          aspect: aspect, targetAspect: targetAspect)
     }
 
     /// The UTI that describes the camera container, not the TIFF shell it is
@@ -391,7 +407,8 @@ enum ImageDecoder {
     /// into float32 linear ProPhoto, matching Mac 1.3.5 without an 8-bit sRGB
     /// intermediate or a hand-written colour matrix.
     private static func pixels(from source: CIImage, maxLongEdge: Int?,
-                               aspect: CGFloat? = nil) throws -> DecodedFrame {
+                               aspect: CGFloat? = nil,
+                               targetAspect: CGFloat? = nil) throws -> DecodedFrame {
         guard let colorSpace = linearProPhoto else {
             throw DecodeError.unreadable("linear ProPhoto RGB is unavailable")
         }
@@ -400,7 +417,16 @@ enum ImageDecoder {
         guard !sourceExtent.isInfinite, !sourceExtent.isEmpty else {
             throw DecodeError.emptyImage
         }
-        if let aspect {
+        if let targetAspect {
+            let crop = centerCrop(width: Int(sourceExtent.width.rounded()),
+                                  height: Int(sourceExtent.height.rounded()),
+                                  targetAspect: targetAspect)
+            sourceExtent = CGRect(x: sourceExtent.origin.x + CGFloat(crop.x),
+                                  y: sourceExtent.origin.y + CGFloat(crop.y),
+                                  width: CGFloat(crop.width),
+                                  height: CGFloat(crop.height))
+            image = image.cropped(to: sourceExtent)
+        } else if let aspect {
             let crop = centerCrop(width: Int(sourceExtent.width.rounded()),
                                   height: Int(sourceExtent.height.rounded()),
                                   aspect: aspect)
@@ -442,8 +468,8 @@ enum ImageDecoder {
     }
 
     /// The integer rectangle used by both the Core Image and LibRaw paths.
-    /// `aspect` is long edge over short edge. The crop keeps the photograph's
-    /// own orientation: a portrait frame is cropped to the reciprocal, so a
+    /// `aspect` is long edge over short edge and keeps the photograph's own
+    /// orientation: a portrait frame is cropped to the reciprocal, so a
     /// vertical 3:2 photograph becomes 2:3 and not a sideways landscape.
     static func centerCrop(width: Int, height: Int, aspect: CGFloat) -> (x: Int, y: Int, width: Int, height: Int) {
         guard width > 0, height > 0, aspect.isFinite, aspect > 0 else {
@@ -451,6 +477,16 @@ enum ImageDecoder {
         }
         let sourceAspect = CGFloat(width) / CGFloat(height)
         let targetAspect = sourceAspect >= 1 ? aspect : 1 / aspect
+        return centerCrop(width: width, height: height, targetAspect: targetAspect)
+    }
+
+    /// Crop to an exact target aspect, which may be portrait or landscape.
+    static func centerCrop(width: Int, height: Int,
+                           targetAspect: CGFloat) -> (x: Int, y: Int, width: Int, height: Int) {
+        guard width > 0, height > 0, targetAspect.isFinite, targetAspect > 0 else {
+            return (0, 0, max(width, 1), max(height, 1))
+        }
+        let sourceAspect = CGFloat(width) / CGFloat(height)
         var cropWidth = width
         var cropHeight = height
         if sourceAspect > targetAspect {
