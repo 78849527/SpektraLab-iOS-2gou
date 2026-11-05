@@ -285,17 +285,22 @@ final class ViewModel: ObservableObject {
     /// has stopped moving.
     func scheduleRender() {
         needsRender = true
+
+        // A slider produces many updates each second. Replace the pending
+        // timer instead of keeping the first one, which would render while
+        // the user is still dragging and block the MainActor.
+        renderTask?.cancel()
         guard !renderInFlight else { return }
-        // `@MainActor` on the closure: `Task { ... }` is `@Sendable` by
-        // default, and a closure that captures a `MainActor`-isolated
-        // `ViewModel` is not Sendable unless the closure says where it
-        // runs. Without this, Swift 6's strict concurrency rejects it.
+
         renderTask = Task { @MainActor [weak self] in
-            // A short settle, so a drag does not render on every frame. The
-            // preview is a reprint of a cached negative — fast — but not free.
-            try? await Task.sleep(nanoseconds: 90_000_000)
-            guard !Task.isCancelled else { return }
-            await self?.renderNow()
+            do {
+                try await Task.sleep(nanoseconds: 180_000_000)
+            } catch {
+                return // Superseded by a newer selection / slider value.
+            }
+            guard let self, !Task.isCancelled, self.needsRender else { return }
+            self.needsRender = false
+            await self.renderNow()
         }
     }
 
@@ -310,7 +315,6 @@ final class ViewModel: ObservableObject {
             renderInFlight = false
             // A request that arrived while this render was running runs now.
             if needsRender {
-                needsRender = false
                 scheduleRender()
             }
         }
