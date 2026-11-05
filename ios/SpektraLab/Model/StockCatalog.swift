@@ -85,8 +85,10 @@ struct StockCatalog: Sendable {
             guard let data = try? Data(contentsOf: dir.appendingPathComponent(file)),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let info = json["info"] as? [String: Any],
-                  let supportRaw = info["support"] as? String,
-                  let typeRaw = info["type"] as? String,
+                  let supportRaw = (info["support"] as? String)
+                    ?? (json["derived_from"] != nil ? "film" : nil),
+                  let typeRaw = (info["type"] as? String)
+                    ?? (json["derived_from"] != nil ? "negative" : nil),
                   let support = Stock.Support(rawValue: supportRaw),
                   let type = Stock.FilmType(rawValue: typeRaw) else {
                 continue

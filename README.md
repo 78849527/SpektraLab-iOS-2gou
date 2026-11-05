@@ -14,9 +14,59 @@ SpektraLab 的 iPhone 社区移植版。它使用 C++20 与 Metal 运行真实�
 | 导入 | JPEG、Apple RAW/DNG，以及系统支持的 Sony ARW |
 | 导出 | 原始像素分辨率的 8-bit sRGB JPEG（当前解码上限 6400 万像素） |
 | 预览 | 保持原始宽高比，支持缩放、拖动和双击复位 |
-| 配置 | 26 款胶片/正片配置、7 款相纸配置 |
+| 配置 | 27 款胶片/正片配置、7 款相纸配置 |
 
 目前仍处于测试阶段。不同 iPhone 和 iOS 版本支持的相机 RAW 型号可能不同，重要照片请保留原文件。
+
+## 胶片与相纸实测预览
+
+以下图片统一使用 Sony `DSC07461.ARW`，经 Apple RAW 解码后，以 iOS 当前默认参数通过项目自身的 C++/Metal 引擎生成。每张联系表固定一种相纸，并列出全部 23 款负片；这反映当前版本的真实输出，包括仍需继续修正的偏亮或偏色情况。
+
+<details>
+<summary>Fujifilm Crystal Archive Type II</summary>
+
+![Fujifilm Crystal Archive Type II combinations](docs/stock-previews/fujifilm_crystal_archive_typeii.jpg)
+</details>
+
+<details>
+<summary>Ilford Multigrade IV RC</summary>
+
+![Ilford Multigrade IV RC combinations](docs/stock-previews/ilford_multigrade_iv_rc.jpg)
+</details>
+
+<details>
+<summary>Kodak Ektacolor Edge</summary>
+
+![Kodak Ektacolor Edge combinations](docs/stock-previews/kodak_ektacolor_edge.jpg)
+</details>
+
+<details>
+<summary>Kodak Endura Premier</summary>
+
+![Kodak Endura Premier combinations](docs/stock-previews/kodak_endura_premier.jpg)
+</details>
+
+<details>
+<summary>Kodak Portra Endura</summary>
+
+![Kodak Portra Endura combinations](docs/stock-previews/kodak_portra_endura.jpg)
+</details>
+
+<details>
+<summary>Kodak Supra Endura</summary>
+
+![Kodak Supra Endura combinations](docs/stock-previews/kodak_supra_endura.jpg)
+</details>
+
+<details>
+<summary>Kodak Ultra Endura</summary>
+
+![Kodak Ultra Endura combinations](docs/stock-previews/kodak_ultra_endura.jpg)
+</details>
+
+反转片没有相纸打印阶段，因此单独列出：
+
+![Reversal film previews](docs/stock-previews/reversal-films.jpg)
 
 ## 下载
 
@@ -66,7 +116,7 @@ GitHub Release 中的 IPA 不带你的个人开发证书，不能直接双击安
 
 - JPEG 通过 ImageIO 解码。
 - Apple RAW/DNG 和 Sony ARW 优先通过 Core Image 的 RAW 解码器读取。
-- RAW 解码会关闭 Core Image 默认的额外曝光、全局曲线、局部 tone map、EDR 和 gamut mapping，避免同一张照片在 iOS 上被重复提亮。
+- RAW 使用 Apple 解码器的受支持默认处理；应用不会调用不同 iOS 实现中可能不存在的 RAW 属性 setter。
 - 解码结果转换为引擎需要的线性 ProPhoto RGB。
 - 预览长边限制为 2048 px，以降低手机内存和实时切换胶片时的负担。
 
@@ -85,7 +135,7 @@ Sony ARW 是否可解码由 iOS/Core Image 对具体相机型号的支持决定�
 
 - iOS 27 上使用系统原生 Liquid Glass。
 - 胶片和相纸采用底部横向选择条，切换时照片始终可见。
-- 配置文件只包含实测参数和名称，不包含官方胶片封面，因此当前使用统一胶卷徽标和颜色区分各配置。
+- Mac 版已有封面的 11 款胶片显示真实封面，其余配置使用统一胶卷徽标和稳定颜色区分。
 - 顶部区域保持紧凑，为照片预览保留更多空间。
 
 ## 本地构建
