@@ -55,7 +55,7 @@ LIBRAW = Path(os.environ.get("SPEKTRALAB_LIBRAW_SOURCE",
 
 APP = "SpektraLab"
 PRODUCT_NAME = "SpektraLab"
-IOS_MIN = "27.0"
+IOS_MIN = "16.5"
 MARKETING_VERSION = "1.2.0"
 BUILD_NUMBER = "6"
 
