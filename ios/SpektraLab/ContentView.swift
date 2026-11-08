@@ -17,6 +17,18 @@ import MetalKit
 import UIKit
 import UniformTypeIdentifiers
 
+/// Keep the iOS 26 glass grouping only where the runtime supports it.
+@ViewBuilder
+func labGlassContainer<Content: View>(spacing: CGFloat, @ViewBuilder content: () -> Content) -> some View {
+    if #available(iOS 26.0, *) {
+        GlassEffectContainer(spacing: spacing) {
+            content()
+        }
+    } else {
+        content()
+    }
+}
+
 extension Color {
     static var labInk: Color { Color(red: 0.071, green: 0.071, blue: 0.075) }
     static var labPanel: Color { Color(red: 0.110, green: 0.110, blue: 0.118) }
@@ -305,7 +317,7 @@ struct EditorView: View {
 
                 Spacer()
 
-                GlassEffectContainer(spacing: 8) {
+                labGlassContainer(spacing: 8) {
                     HStack(spacing: 8) {
                         Menu {
                             if model.editingPhotoID != nil {
