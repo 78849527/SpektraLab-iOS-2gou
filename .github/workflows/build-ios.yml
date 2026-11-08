@@ -34,7 +34,7 @@
 name: Build IPA
 on:
   push:
-    branches: [main]
+    branches: [main, 'fix/ios16-5-1-compat-minimal']
     # Documentation does not need forty minutes on a macOS runner, and
     # `cancel-in-progress` above means a typo in the README would otherwise
     # cancel a build that is about to finish.
