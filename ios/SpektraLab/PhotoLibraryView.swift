@@ -9,6 +9,17 @@ import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
 
+private extension View {
+    @ViewBuilder
+    func labSelectionFeedback<Value: Equatable>(trigger: Value) -> some View {
+        if #available(iOS 17.0, *) {
+            sensoryFeedback(.selection, trigger: trigger)
+        } else {
+            self
+        }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject private var model: ViewModel
 
@@ -71,6 +82,13 @@ struct PhotoLibraryView: View {
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 4, alignment: .top),
                                 count: 3)
 
+    private func libraryAnimation(_ duration: Double) -> Animation {
+        if #available(iOS 17.0, *) {
+            return .snappy(duration: duration)
+        }
+        return .easeInOut(duration: duration)
+    }
+
     private var selectablePhotoIDs: Set<UUID> {
         var ids = Set(model.library.map(\.id))
         if let source = model.recipeSourcePhotoID {
@@ -127,12 +145,12 @@ struct PhotoLibraryView: View {
                     .zIndex(4)
             }
         }
-        .animation(.snappy(duration: 0.28), value: selecting)
-        .animation(.snappy(duration: 0.22), value: selected)
-        .animation(.snappy(duration: 0.22), value: model.libraryMessage)
+        .animation(libraryAnimation(0.28), value: selecting)
+        .animation(libraryAnimation(0.22), value: selected)
+        .animation(libraryAnimation(0.22), value: model.libraryMessage)
         .animation(.easeInOut(duration: 0.18), value: model.libraryBusy)
-        .sensoryFeedback(.selection, trigger: selected)
-        .onChange(of: model.recipeSourcePhotoID) { _, source in
+        .labSelectionFeedback(trigger: selected)
+        .onChange(of: model.recipeSourcePhotoID) { source in
             if let source {
                 selected.remove(source)
             }
@@ -184,11 +202,11 @@ struct PhotoLibraryView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            GlassEffectContainer(spacing: 8) {
+            labGlassContainer(spacing: 8) {
                 HStack(spacing: 8) {
                     if !model.library.isEmpty {
                         Button {
-                            withAnimation(.snappy(duration: 0.2)) {
+                            withAnimation(libraryAnimation(0.2)) {
                                 selecting.toggle()
                                 if !selecting { selected.removeAll() }
                             }
@@ -227,7 +245,7 @@ struct PhotoLibraryView: View {
             }
         }
         .padding(.top, 2)
-        .onChange(of: pickerItems) { _, items in
+        .onChange(of: pickerItems) { items in
             guard !items.isEmpty else { return }
             Task { @MainActor in
                 await model.importPickedItems(items)
@@ -345,7 +363,7 @@ struct PhotoLibraryView: View {
                 .onAppear {
                     proxy.scrollTo(model.filmStock, anchor: .center)
                 }
-                .onChange(of: model.filmStock) { _, stock in
+                .onChange(of: model.filmStock) { stock in
                     withAnimation(.easeOut(duration: 0.18)) {
                         proxy.scrollTo(stock, anchor: .center)
                     }
