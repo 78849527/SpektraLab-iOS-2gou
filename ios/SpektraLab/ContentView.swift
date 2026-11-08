@@ -18,6 +18,7 @@ import UIKit
 import UniformTypeIdentifiers
 
 /// Keep the iOS 26 glass grouping only where the runtime supports it.
+@MainActor
 @ViewBuilder
 func labGlassContainer<Content: View>(spacing: CGFloat, @ViewBuilder content: () -> Content) -> some View {
     if #available(iOS 26.0, *) {
