@@ -39,7 +39,7 @@ app="$root/ios/SpektraLab"
 # The iOS deployment target. It must match the Xcode project's
 # IPHONEOS_DEPLOYMENT_TARGET, or the metallib and the app disagree about what
 # the GPU supports.
-IOS_MIN="27.0"
+IOS_MIN="16.5"
 
 # The engine's own safety flags. Do not remove `-fmetal-math-mode=safe`: the
 # engine's `check_math_mode` probe rejects a fast-math metallib outright, and
