@@ -390,41 +390,6 @@ final class ViewModel: ObservableObject {
         }
     }
 
-    /// Folder selection is separate from multi-file selection because iOS 16
-    /// does not reliably return a directory from a multi-select document picker.
-    /// Keep the parent's security scope open while reading its descendants.
-    func importFolder(from folderURL: URL) async {
-        let accessed = folderURL.startAccessingSecurityScopedResource()
-        defer { if accessed { folderURL.stopAccessingSecurityScopedResource() } }
-
-        guard let isDirectory = try? folderURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory,
-              isDirectory else {
-            libraryMessage = "选择的项目不是文件夹"
-            return
-        }
-        guard let enumerator = FileManager.default.enumerator(
-            at: folderURL,
-            includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else {
-            libraryMessage = "无法读取文件夹，请检查“文件与文件夹”访问权限"
-            return
-        }
-        var photoURLs: [URL] = []
-        while let child = enumerator.nextObject() as? URL {
-            if Self.supportsImportedPhoto(child),
-               (try? child.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) != false {
-                photoURLs.append(child)
-            }
-        }
-        guard !photoURLs.isEmpty else {
-            libraryMessage = "文件夹内没有找到可导入的照片"
-            return
-        }
-        photoURLs.sort { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
-        await importFiles(from: photoURLs)
-    }
-
     /// Single-file compatibility entry point for the DEBUG probe.
     func importFile(from url: URL) async {
         await importFiles(from: [url])
