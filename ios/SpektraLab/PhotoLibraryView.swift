@@ -8,6 +8,46 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
+import UIKit
+
+/// UIKit document picker avoids overlapping SwiftUI fileImporter presentations
+/// on iOS 16. The user selects individual files, never a whole directory.
+private struct LabFileDocumentPicker: UIViewControllerRepresentable {
+    var onFiles: ([URL]) -> Void
+    var onCancel: () -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: false)
+        picker.allowsMultipleSelection = true
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onFiles: onFiles, onCancel: onCancel)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onFiles: ([URL]) -> Void
+        let onCancel: () -> Void
+
+        init(onFiles: @escaping ([URL]) -> Void, onCancel: @escaping () -> Void) {
+            self.onFiles = onFiles
+            self.onCancel = onCancel
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            onFiles(urls)
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onCancel()
+        }
+    }
+}
 
 private extension View {
     @ViewBuilder
@@ -74,7 +114,6 @@ struct PhotoLibraryView: View {
     @EnvironmentObject private var model: ViewModel
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var showingFileImporter = false
-    @State private var showingFolderImporter = false
     @State private var selecting = false
     @State private var selected: Set<UUID> = []
     @State private var deleteIDs: Set<UUID> = []
@@ -156,24 +195,17 @@ struct PhotoLibraryView: View {
                 selected.remove(source)
             }
         }
-        .fileImporter(isPresented: $showingFileImporter,
-                      allowedContentTypes: [.item],
-                      allowsMultipleSelection: true) { result in
-            switch result {
-            case .success(let urls):
-                Task { @MainActor in await model.importFiles(from: urls) }
-            case .failure(let error):
-                model.reportFileImportError(error)
-            }
-        }
-        .fileImporter(isPresented: $showingFolderImporter,
-                      allowedContentTypes: [.folder]) { result in
-            switch result {
-            case .success(let url):
-                Task { @MainActor in await model.importFolder(from: url) }
-            case .failure(let error):
-                model.reportFileImportError(error)
-            }
+        .sheet(isPresented: $showingFileImporter) {
+            LabFileDocumentPicker(
+                onFiles: { urls in
+                    showingFileImporter = false
+                    Task { @MainActor in await model.importFiles(from: urls) }
+                },
+                onCancel: {
+                    showingFileImporter = false
+                }
+            )
+            .ignoresSafeArea()
         }
         .confirmationDialog("删除这些照片？",
                             isPresented: $showingDelete,
@@ -246,41 +278,21 @@ struct PhotoLibraryView: View {
                                 .labGlassInteractive(in: Circle())
                         }
                         .tint(Color.labCream)
-                        .accessibilityLabel("导入照片")
-                        .contextMenu {
-                            Button {
-                                showingFileImporter = true
-                            } label: {
-                                Label("从文件导入 RAW / JPEG", systemImage: "doc")
-                            }
-                            Button {
-                                showingFolderImporter = true
-                            } label: {
-                                Label("导入整个文件夹", systemImage: "folder.badge.plus")
-                            }
-                        }
+                        .accessibilityLabel("从相册添加照片")
                     }
 
                     if !selecting {
-                        Menu {
-                            Button {
-                                showingFileImporter = true
-                            } label: {
-                                Label("选择文件中的照片", systemImage: "photo")
-                            }
-                            Button {
-                                showingFolderImporter = true
-                            } label: {
-                                Label("导入整个文件夹", systemImage: "folder.badge.plus")
-                            }
+                        Button {
+                            showingFileImporter = true
                         } label: {
-                            Image(systemName: "folder")
+                            Image(systemName: "doc.badge.plus")
                                 .font(.system(size: 15, weight: .semibold))
                                 .foregroundStyle(Color.labCream)
                                 .frame(width: 44, height: 44)
                                 .labGlassInteractive(in: Circle())
                         }
-                        .accessibilityLabel("从文件或文件夹导入照片")
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("从文件选择照片")
                     }
                 }
             }
@@ -807,19 +819,7 @@ struct PhotoLibraryView: View {
                 Button {
                     showingFileImporter = true
                 } label: {
-                    Label("从文件导入 RAW / JPEG", systemImage: "folder.badge.plus")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(Color.labCream.opacity(0.82))
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 46)
-                        .labGlassInteractive(in: Capsule())
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    showingFolderImporter = true
-                } label: {
-                    Label("导入整个文件夹", systemImage: "folder.badge.plus")
+                    Label("从文件选择照片（RAW / JPEG）", systemImage: "doc.badge.plus")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(Color.labCream.opacity(0.82))
                         .frame(maxWidth: .infinity)
