@@ -74,6 +74,7 @@ struct PhotoLibraryView: View {
     @EnvironmentObject private var model: ViewModel
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var showingFileImporter = false
+    @State private var showingFolderImporter = false
     @State private var selecting = false
     @State private var selected: Set<UUID> = []
     @State private var deleteIDs: Set<UUID> = []
@@ -156,10 +157,23 @@ struct PhotoLibraryView: View {
             }
         }
         .fileImporter(isPresented: $showingFileImporter,
-                      allowedContentTypes: [.image, .rawImage],
+                      allowedContentTypes: [.item],
                       allowsMultipleSelection: true) { result in
-            guard case .success(let urls) = result else { return }
-            Task { @MainActor in await model.importFiles(from: urls) }
+            switch result {
+            case .success(let urls):
+                Task { @MainActor in await model.importFiles(from: urls) }
+            case .failure(let error):
+                model.reportFileImportError(error)
+            }
+        }
+        .fileImporter(isPresented: $showingFolderImporter,
+                      allowedContentTypes: [.folder]) { result in
+            switch result {
+            case .success(let url):
+                Task { @MainActor in await model.importFolder(from: url) }
+            case .failure(let error):
+                model.reportFileImportError(error)
+            }
         }
         .confirmationDialog("删除这些照片？",
                             isPresented: $showingDelete,
@@ -237,9 +251,36 @@ struct PhotoLibraryView: View {
                             Button {
                                 showingFileImporter = true
                             } label: {
-                                Label("从文件导入 RAW / JPEG", systemImage: "folder")
+                                Label("从文件导入 RAW / JPEG", systemImage: "doc")
+                            }
+                            Button {
+                                showingFolderImporter = true
+                            } label: {
+                                Label("导入整个文件夹", systemImage: "folder.badge.plus")
                             }
                         }
+                    }
+
+                    if !selecting {
+                        Menu {
+                            Button {
+                                showingFileImporter = true
+                            } label: {
+                                Label("选择文件中的照片", systemImage: "photo")
+                            }
+                            Button {
+                                showingFolderImporter = true
+                            } label: {
+                                Label("导入整个文件夹", systemImage: "folder.badge.plus")
+                            }
+                        } label: {
+                            Image(systemName: "folder")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(Color.labCream)
+                                .frame(width: 44, height: 44)
+                                .labGlassInteractive(in: Circle())
+                        }
+                        .accessibilityLabel("从文件或文件夹导入照片")
                     }
                 }
             }
@@ -767,6 +808,18 @@ struct PhotoLibraryView: View {
                     showingFileImporter = true
                 } label: {
                     Label("从文件导入 RAW / JPEG", systemImage: "folder.badge.plus")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Color.labCream.opacity(0.82))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 46)
+                        .labGlassInteractive(in: Capsule())
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    showingFolderImporter = true
+                } label: {
+                    Label("导入整个文件夹", systemImage: "folder.badge.plus")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(Color.labCream.opacity(0.82))
                         .frame(maxWidth: .infinity)
