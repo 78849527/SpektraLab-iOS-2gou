@@ -17,6 +17,19 @@ import MetalKit
 import UIKit
 import UniformTypeIdentifiers
 
+/// Keep the iOS 26 glass grouping only where the runtime supports it.
+@MainActor
+@ViewBuilder
+func labGlassContainer<Content: View>(spacing: CGFloat, @ViewBuilder content: () -> Content) -> some View {
+    if #available(iOS 26.0, *) {
+        GlassEffectContainer(spacing: spacing) {
+            content()
+        }
+    } else {
+        content()
+    }
+}
+
 extension Color {
     static var labInk: Color { Color(red: 0.071, green: 0.071, blue: 0.075) }
     static var labPanel: Color { Color(red: 0.110, green: 0.110, blue: 0.118) }
@@ -30,7 +43,14 @@ extension View {
     @ViewBuilder
     nonisolated func labGlass<S: Shape>(_ active: Bool = true, in shape: S) -> some View {
 #if compiler(>=6.2)
-        glassEffect(active ? .regular : .clear, in: shape)
+        if #available(iOS 26.0, *) {
+            glassEffect(active ? .regular : .clear, in: shape)
+        } else if active {
+            background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(Color.white.opacity(0.10), lineWidth: 1))
+        } else {
+            self
+        }
 #else
         if active {
             background(.ultraThinMaterial, in: shape)
@@ -41,9 +61,17 @@ extension View {
 #endif
     }
 
+    @ViewBuilder
     nonisolated func labGlassInteractive<S: Shape>(_ active: Bool = true, in shape: S) -> some View {
 #if compiler(>=6.2)
-        glassEffect(active ? .regular.interactive() : .clear, in: shape)
+        if #available(iOS 26.0, *) {
+            glassEffect(active ? .regular.interactive() : .clear, in: shape)
+        } else if active {
+            background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(Color.white.opacity(0.10), lineWidth: 1))
+        } else {
+            self
+        }
 #else
         if active {
             background(.ultraThinMaterial, in: shape)
@@ -56,9 +84,16 @@ extension View {
 
     /// A tinted glass surface. Used for the one primary action on a screen
     /// (add photos, paste a recipe), so the rest of the chrome stays neutral.
+    @ViewBuilder
     nonisolated func labGlassTint<S: Shape>(_ tint: Color, in shape: S) -> some View {
 #if compiler(>=6.2)
-        glassEffect(.regular.tint(tint).interactive(), in: shape)
+        if #available(iOS 26.0, *) {
+            glassEffect(.regular.tint(tint).interactive(), in: shape)
+        } else {
+            background(tint.opacity(0.42), in: shape)
+                .background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(Color.white.opacity(0.12), lineWidth: 1))
+        }
 #else
         background(tint.opacity(0.42), in: shape)
             .background(.ultraThinMaterial, in: shape)
@@ -103,6 +138,13 @@ struct EditorView: View {
     @State private var savedPan = CGSize.zero
     @State private var copyToast = false
 
+    private var immersiveAnimation: Animation {
+        if #available(iOS 17.0, *) {
+            return .snappy(duration: 0.24)
+        }
+        return .easeInOut(duration: 0.24)
+    }
+
     private enum Deck: String, CaseIterable, Identifiable, Equatable {
         case film = "胶片"
         case paper = "相纸"
@@ -132,7 +174,7 @@ struct EditorView: View {
 
             if immersive {
                 Button {
-                    withAnimation(.snappy(duration: 0.24)) { immersive = false }
+                    withAnimation(immersiveAnimation) { immersive = false }
                 } label: {
                     Image(systemName: "arrow.down.right.and.arrow.up.left")
                         .font(.system(size: 14, weight: .semibold))
@@ -161,7 +203,7 @@ struct EditorView: View {
                     .transition(.opacity)
             }
         }
-        .animation(.snappy(duration: 0.24), value: immersive)
+        .animation(immersiveAnimation, value: immersive)
         .statusBarHidden(immersive)
         .preferredColorScheme(.dark)
         .alert("导出照片", isPresented: $showingExport) {
@@ -276,7 +318,7 @@ struct EditorView: View {
 
                 Spacer()
 
-                GlassEffectContainer(spacing: 8) {
+                labGlassContainer(spacing: 8) {
                     HStack(spacing: 8) {
                         Menu {
                             if model.editingPhotoID != nil {
@@ -428,11 +470,11 @@ struct EditorView: View {
                         savedPan = .zero
                     }
                 } else {
-                    withAnimation(.snappy(duration: 0.24)) { immersive.toggle() }
+                    withAnimation(immersiveAnimation) { immersive.toggle() }
                 }
             }
             .exclusively(before: TapGesture().onEnded {
-                withAnimation(.snappy(duration: 0.24)) { immersive.toggle() }
+                withAnimation(immersiveAnimation) { immersive.toggle() }
             })
     }
 

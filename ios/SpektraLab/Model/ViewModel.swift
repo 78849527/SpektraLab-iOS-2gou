@@ -314,19 +314,60 @@ final class ViewModel: ObservableObject {
             : "已导入 \(imported) 张，\(failed) 张无法读取"
     }
 
-    /// Import one or more files, including the RAW containers Photos may only
-    /// expose as a rendered preview.
+    /// Files providers can expose RAW as a generic item on iOS 16. Use the
+    /// extension as a fallback instead of hiding those files in the picker.
+    private static func supportsImportedPhoto(_ url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        let rawAndImageExtensions: Set<String> = [
+            "jpg", "jpeg", "png", "heic", "heif", "tif", "tiff",
+            "bmp", "gif", "webp", "dng", "arw", "nef", "nrw",
+            "cr2", "cr3", "raf", "rw2", "orf", "pef", "srw",
+            "raw", "rwl", "x3f", "3fr", "iiq", "mos", "mrw"
+        ]
+        if rawAndImageExtensions.contains(ext) { return true }
+        guard let type = UTType(filenameExtension: ext) else { return false }
+        return type.conforms(to: .image) || type.conforms(to: .rawImage)
+    }
+
+    /// Coordinate reading with Files/iCloud providers while the caller holds
+    /// the security-scoped access grant. The bytes are then stored in-app.
+    private static func readImportedFile(_ url: URL) throws -> Data {
+        var coordinatorError: NSError?
+        var fileResult: Result<Data, Error>?
+        NSFileCoordinator(filePresenter: nil)
+            .coordinate(readingItemAt: url, options: [], error: &coordinatorError) { coordinatedURL in
+                fileResult = Result {
+                    try Data(contentsOf: coordinatedURL, options: [.mappedIfSafe])
+                }
+            }
+        if let coordinatorError { throw coordinatorError }
+        guard let fileResult else {
+            throw DecodeError.unreadable("文件提供方没有返回数据")
+        }
+        return try fileResult.get()
+    }
+
+    func reportFileImportError(_ error: Error) {
+        libraryMessage = "文件选择失败：\(error.localizedDescription)"
+    }
+
+    /// Import selected images from Files, including RAW containers that the
+    /// Photos picker may only expose as rendered previews.
     func importFiles(from urls: [URL]) async {
         guard !urls.isEmpty else { return }
         libraryBusy = "正在导入 0/\(urls.count)"
         var imported = 0
         var failed = 0
+        var firstError: String?
         for (index, url) in urls.enumerated() {
             libraryBusy = "正在导入 \(index + 1)/\(urls.count)"
             let accessed = url.startAccessingSecurityScopedResource()
             defer { if accessed { url.stopAccessingSecurityScopedResource() } }
             do {
-                let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+                guard Self.supportsImportedPhoto(url) else {
+                    throw DecodeError.unreadable("不支持的图片类型：\(url.lastPathComponent)")
+                }
+                let data = try Self.readImportedFile(url)
                 guard !data.isEmpty else { throw DecodeError.unreadable("文件为空") }
                 let hint = UTType(filenameExtension: url.pathExtension)
                 try await addPhoto(data: data,
@@ -335,13 +376,18 @@ final class ViewModel: ObservableObject {
                 imported += 1
             } catch {
                 failed += 1
+                if firstError == nil {
+                    firstError = "\(url.lastPathComponent)：\(error.localizedDescription)"
+                }
             }
             await Task.yield()
         }
         libraryBusy = nil
-        libraryMessage = failed == 0
-            ? "已导入 \(imported) 张照片"
-            : "已导入 \(imported) 张，\(failed) 张无法读取"
+        if failed == 0 {
+            libraryMessage = "已导入 \(imported) 张照片"
+        } else {
+            libraryMessage = "已导入 \(imported) 张，\(failed) 张失败；\(firstError ?? "无法读取")"
+        }
     }
 
     /// Single-file compatibility entry point for the DEBUG probe.

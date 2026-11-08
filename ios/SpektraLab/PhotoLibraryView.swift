@@ -8,6 +8,57 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
+import UIKit
+
+/// UIKit document picker avoids overlapping SwiftUI fileImporter presentations
+/// on iOS 16. The user selects individual files, never a whole directory.
+private struct LabFileDocumentPicker: UIViewControllerRepresentable {
+    var onFiles: ([URL]) -> Void
+    var onCancel: () -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: false)
+        picker.allowsMultipleSelection = true
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onFiles: onFiles, onCancel: onCancel)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onFiles: ([URL]) -> Void
+        let onCancel: () -> Void
+
+        init(onFiles: @escaping ([URL]) -> Void, onCancel: @escaping () -> Void) {
+            self.onFiles = onFiles
+            self.onCancel = onCancel
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            onFiles(urls)
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onCancel()
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func labSelectionFeedback<Value: Equatable>(trigger: Value) -> some View {
+        if #available(iOS 17.0, *) {
+            sensoryFeedback(.selection, trigger: trigger)
+        } else {
+            self
+        }
+    }
+}
 
 struct ContentView: View {
     @EnvironmentObject private var model: ViewModel
@@ -71,6 +122,13 @@ struct PhotoLibraryView: View {
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 4, alignment: .top),
                                 count: 3)
 
+    private func libraryAnimation(_ duration: Double) -> Animation {
+        if #available(iOS 17.0, *) {
+            return .snappy(duration: duration)
+        }
+        return .easeInOut(duration: duration)
+    }
+
     private var selectablePhotoIDs: Set<UUID> {
         var ids = Set(model.library.map(\.id))
         if let source = model.recipeSourcePhotoID {
@@ -127,21 +185,27 @@ struct PhotoLibraryView: View {
                     .zIndex(4)
             }
         }
-        .animation(.snappy(duration: 0.28), value: selecting)
-        .animation(.snappy(duration: 0.22), value: selected)
-        .animation(.snappy(duration: 0.22), value: model.libraryMessage)
+        .animation(libraryAnimation(0.28), value: selecting)
+        .animation(libraryAnimation(0.22), value: selected)
+        .animation(libraryAnimation(0.22), value: model.libraryMessage)
         .animation(.easeInOut(duration: 0.18), value: model.libraryBusy)
-        .sensoryFeedback(.selection, trigger: selected)
-        .onChange(of: model.recipeSourcePhotoID) { _, source in
+        .labSelectionFeedback(trigger: selected)
+        .onChange(of: model.recipeSourcePhotoID) { source in
             if let source {
                 selected.remove(source)
             }
         }
-        .fileImporter(isPresented: $showingFileImporter,
-                      allowedContentTypes: [.image, .rawImage],
-                      allowsMultipleSelection: true) { result in
-            guard case .success(let urls) = result else { return }
-            Task { @MainActor in await model.importFiles(from: urls) }
+        .sheet(isPresented: $showingFileImporter) {
+            LabFileDocumentPicker(
+                onFiles: { urls in
+                    showingFileImporter = false
+                    Task { @MainActor in await model.importFiles(from: urls) }
+                },
+                onCancel: {
+                    showingFileImporter = false
+                }
+            )
+            .ignoresSafeArea()
         }
         .confirmationDialog("删除这些照片？",
                             isPresented: $showingDelete,
@@ -184,11 +248,11 @@ struct PhotoLibraryView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            GlassEffectContainer(spacing: 8) {
+            labGlassContainer(spacing: 8) {
                 HStack(spacing: 8) {
                     if !model.library.isEmpty {
                         Button {
-                            withAnimation(.snappy(duration: 0.2)) {
+                            withAnimation(libraryAnimation(0.2)) {
                                 selecting.toggle()
                                 if !selecting { selected.removeAll() }
                             }
@@ -214,20 +278,27 @@ struct PhotoLibraryView: View {
                                 .labGlassInteractive(in: Circle())
                         }
                         .tint(Color.labCream)
-                        .accessibilityLabel("导入照片")
-                        .contextMenu {
-                            Button {
-                                showingFileImporter = true
-                            } label: {
-                                Label("从文件导入 RAW / JPEG", systemImage: "folder")
-                            }
+                        .accessibilityLabel("从相册添加照片")
+                    }
+
+                    if !selecting {
+                        Button {
+                            showingFileImporter = true
+                        } label: {
+                            Image(systemName: "doc.badge.plus")
+                                .font(.system(size: 15, weight: .semibold))
+                                .foregroundStyle(Color.labCream)
+                                .frame(width: 44, height: 44)
+                                .labGlassInteractive(in: Circle())
                         }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("从文件选择照片")
                     }
                 }
             }
         }
         .padding(.top, 2)
-        .onChange(of: pickerItems) { _, items in
+        .onChange(of: pickerItems) { items in
             guard !items.isEmpty else { return }
             Task { @MainActor in
                 await model.importPickedItems(items)
@@ -345,7 +416,7 @@ struct PhotoLibraryView: View {
                 .onAppear {
                     proxy.scrollTo(model.filmStock, anchor: .center)
                 }
-                .onChange(of: model.filmStock) { _, stock in
+                .onChange(of: model.filmStock) { stock in
                     withAnimation(.easeOut(duration: 0.18)) {
                         proxy.scrollTo(stock, anchor: .center)
                     }
@@ -748,7 +819,7 @@ struct PhotoLibraryView: View {
                 Button {
                     showingFileImporter = true
                 } label: {
-                    Label("从文件导入 RAW / JPEG", systemImage: "folder.badge.plus")
+                    Label("从文件选择照片（RAW / JPEG）", systemImage: "doc.badge.plus")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(Color.labCream.opacity(0.82))
                         .frame(maxWidth: .infinity)
