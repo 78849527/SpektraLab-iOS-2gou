@@ -553,6 +553,7 @@ jobs:
           echo "shipped bundle id: $(plutil -extract CFBundleIdentifier raw - < build/shipped.plist)"
           echo "shipped executable: $(plutil -extract CFBundleExecutable raw - < build/shipped.plist)"
           echo "shipped minimum iOS: $(plutil -extract MinimumOSVersion raw - < build/shipped.plist)"
+          test "$(plutil -extract MinimumOSVersion raw - < build/shipped.plist)" = "16.5" || { echo "::error::IPA minimum iOS is not 16.5"; exit 1; }
           # Checked in the zip, not the staging directory: this is the file a
           # re-signer and an installer each look for, and a seal that did not
           # make it into `Payload/` is the same as no seal at all.
