@@ -348,24 +348,24 @@ final class ViewModel: ObservableObject {
     }
 
     func reportFileImportError(_ error: Error) {
-        libraryMessage = "文件选择失败：\\(error.localizedDescription)"
+        libraryMessage = "文件选择失败：\(error.localizedDescription)"
     }
 
     /// Import selected images from Files, including RAW containers that the
     /// Photos picker may only expose as rendered previews.
     func importFiles(from urls: [URL]) async {
         guard !urls.isEmpty else { return }
-        libraryBusy = "正在导入 0/\\(urls.count)"
+        libraryBusy = "正在导入 0/\(urls.count)"
         var imported = 0
         var failed = 0
         var firstError: String?
         for (index, url) in urls.enumerated() {
-            libraryBusy = "正在导入 \\(index + 1)/\\(urls.count)"
+            libraryBusy = "正在导入 \(index + 1)/\(urls.count)"
             let accessed = url.startAccessingSecurityScopedResource()
             defer { if accessed { url.stopAccessingSecurityScopedResource() } }
             do {
                 guard Self.supportsImportedPhoto(url) else {
-                    throw DecodeError.unreadable("不支持的图片类型：\\(url.lastPathComponent)")
+                    throw DecodeError.unreadable("不支持的图片类型：\(url.lastPathComponent)")
                 }
                 let data = try Self.readImportedFile(url)
                 guard !data.isEmpty else { throw DecodeError.unreadable("文件为空") }
@@ -377,16 +377,16 @@ final class ViewModel: ObservableObject {
             } catch {
                 failed += 1
                 if firstError == nil {
-                    firstError = "\\(url.lastPathComponent)：\\(error.localizedDescription)"
+                    firstError = "\(url.lastPathComponent)：\(error.localizedDescription)"
                 }
             }
             await Task.yield()
         }
         libraryBusy = nil
         if failed == 0 {
-            libraryMessage = "已导入 \\(imported) 张照片"
+            libraryMessage = "已导入 \(imported) 张照片"
         } else {
-            libraryMessage = "已导入 \\(imported) 张，\\(failed) 张失败；\\(firstError ?? "无法读取")"
+            libraryMessage = "已导入 \(imported) 张，\(failed) 张失败；\(firstError ?? "无法读取")"
         }
     }
 
